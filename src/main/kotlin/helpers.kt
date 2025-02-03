@@ -183,8 +183,6 @@ fun latestFromRemote(group: String, artifact: String, major: Int, minor: Int? = 
         .toString()
 }
 
-private val versionCache = WeakHashMap<Project, String>()
-
 fun Project.lk(setup: LkGradleHelpers.() -> Unit) = LkGradleHelpers(this).also(setup)
 
 @Deprecated("Remove minor, now set with gradle property 'versionMinor'")
@@ -196,11 +194,8 @@ class LkGradleHelpers(val project: Project) {
     }
     val versionMinor: Int = (project.findProperty("versionMinor") as? String)?.toIntOrNull() ?: 0
     fun gitBasedVersion(): String {
-        return versionCache.getOrPut(project.rootProject) {
-            val v = project.rootDir.gitBasedVersion(versionMajor, versionMinor)?.toString()
-                ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
-            v
-        }
+        return project.rootDir.gitBasedVersion(versionMajor, versionMinor)?.toString()
+            ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
     }
 
     val lockFile = project.projectDir.resolve("mavenOrLocal.lock")
