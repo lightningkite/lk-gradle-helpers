@@ -1,1 +1,1 @@
-rootProject.name = "deploy-helpers"
+rootProject.name = "lk-gradle-helpers"
