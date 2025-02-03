@@ -1,5 +1,7 @@
 package com.lightningkite.deployhelpers
 
+import com.lightningkite.deployhelpers.publishing
+import com.lightningkite.deployhelpers.signing
 import groovy.util.Node
 import groovy.util.NodeList
 import groovy.xml.XmlParser
@@ -8,15 +10,14 @@ import org.gradle.api.credentials.AwsCredentials
 import org.gradle.api.publish.maven.MavenPom
 import org.gradle.api.publish.maven.MavenPomDeveloperSpec
 import org.gradle.api.publish.maven.MavenPomLicenseSpec
-import org.gradle.kotlin.dsl.credentials
-import org.gradle.kotlin.dsl.maven
-import org.gradle.kotlin.dsl.provideDelegate
-import org.gradle.kotlin.dsl.repositories
+import org.gradle.internal.extensions.core.extra
+import org.gradle.kotlin.dsl.*
 import org.jetbrains.kotlin.gradle.targets.js.npm.min
 import java.io.File
 import java.net.URI
 import java.net.URL
 import java.time.OffsetDateTime
+import java.util.WeakHashMap
 
 private class MarkerClass
 
@@ -44,6 +45,7 @@ fun MavenPomDeveloperSpec.joseph() {
         email.set("joseph@lightningkite.com")
     }
 }
+
 fun MavenPomDeveloperSpec.brady() {
     developer {
         id.set("bjsvedin")
@@ -60,14 +62,19 @@ private fun Project.setupGitHubAction(path: String) {
 }
 
 internal fun File.runCli(vararg args: String): String {
+    println("Running ${args.joinToString(" ")}...")
     val process = ProcessBuilder(*args)
         .directory(this)
         .start()
     process.outputStream.close()
-    return process.inputStream.readAllBytes().toString(Charsets.UTF_8)
+    return process.inputStream.readAllBytes().toString(Charsets.UTF_8).also {
+        println("Result: '${it.take(2048)}'")
+    }
 }
 
-internal fun File.getGitCommitTime(): OffsetDateTime = OffsetDateTime.parse(runCli("git", "show", "--no-patch", "--format=%ci", "HEAD").trim())
+internal fun File.getGitCommitTime(): OffsetDateTime =
+    OffsetDateTime.parse(runCli("git", "show", "--no-patch", "--format=%ci", "HEAD").trim())
+
 internal fun File.getGitBranch(): String = runCli("git", "rev-parse", "--abbrev-ref", "HEAD").trim()
 internal fun File.getGitHash(): String = runCli("git", "rev-parse", "HEAD").trim()
 internal data class GitStatus(
@@ -78,6 +85,7 @@ internal data class GitStatus(
 ) {
     val fullyPushed get() = workingTreeClean && ahead == 0 && behind == 0
 }
+
 internal fun File.getGitStatus(): GitStatus = runCli("git", "status").let {
     GitStatus(
         branch = it.substringAfter("On branch ", "").substringBefore('\n').trim(),
@@ -87,8 +95,7 @@ internal fun File.getGitStatus(): GitStatus = runCli("git", "status").let {
             .substringAfter('\'')
             .substringAfter("by ")
             .substringBefore(" commits")
-            .toIntOrNull() ?:
-        it.substringBefore(" different commits each, respectively", "")
+            .toIntOrNull() ?: it.substringBefore(" different commits each, respectively", "")
             .substringAfter("and have ")
             .substringAfter(" and ")
             .toIntOrNull() ?: 0,
@@ -97,15 +104,16 @@ internal fun File.getGitStatus(): GitStatus = runCli("git", "status").let {
             .substringAfter('\'')
             .substringAfter("by ")
             .substringBefore(" commits")
-            .toIntOrNull() ?:
-        it.substringBefore(" different commits each, respectively", "")
+            .toIntOrNull() ?: it.substringBefore(" different commits each, respectively", "")
             .substringAfter("and have ")
             .substringBefore(" and ")
             .toIntOrNull() ?: 0,
     )
 }
-data class Version(val major: Int, val minor: Int, val patch: Int, val postdash: String? = null): Comparable<Version> {
+
+data class Version(val major: Int, val minor: Int, val patch: Int, val postdash: String? = null) : Comparable<Version> {
     override fun compareTo(other: Version): Int = comparator.compare(this, other)
+
     companion object {
         private val comparator = compareBy(Version::major, Version::minor, Version::patch)
         fun fromString(string: String): Version {
@@ -121,25 +129,43 @@ data class Version(val major: Int, val minor: Int, val patch: Int, val postdash:
     fun incrementPatch() = copy(patch = patch + 1)
 }
 
-internal fun File.gitLatestTag(major: Int, minor: Int): Version? = runCli("git", "describe", "--tags", "--match=\"$major.$minor.*\"").takeUnless { it.contains("fatal: ", true) }?.trim()?.takeUnless { it.isBlank() }?.let(Version::fromString)
+internal fun File.gitLatestTag(major: Int, minor: Int): Version? =
+    runCli("git", "describe", "--tags", "--match", "$major.$minor.*").takeUnless { it.contains("fatal: ", true) }
+        ?.trim()?.takeUnless { it.isBlank() }?.let(Version::fromString)
+
 internal fun File.gitTagHash(tag: String): String = runCli("git", "rev-list", "-n", "1", tag).trim()
 internal fun File.gitBasedVersion(versionMajor: Int, versionMinor: Int): Version? {
-    if (!getGitStatus().fullyPushed) return null
+    if (!getGitStatus().fullyPushed) {
+        println("Not fully pushed, using snapshot version")
+        return null
+    }
     val hash = getGitHash()
     val latest = gitLatestTag(versionMajor, versionMinor) ?: Version(versionMajor, versionMinor, -1)
-    if(gitTagHash(latest.toString()) == hash) {
+    println("Current hash: $hash")
+    println("Latest tag: $latest")
+    if (gitTagHash(latest.toString()) == hash) {
         // OK, we've already made the tag!
+        println("Tag is up to date.")
         return latest
     } else {
+        println("Creating new tag...")
         val newTag = latest.incrementPatch()
         runCli("git", "tag", newTag.toString())
         runCli("git", "push", "origin", "tag", newTag.toString())
+        println("New tag created.")
         return newTag
     }
 }
 
 fun latestFromRemote(group: String, artifact: String, major: Int, minor: Int? = null): String {
-    val versions = URL("https://lightningkite-maven.s3.us-west-2.amazonaws.com/${group.replace('.', '/')}/$artifact/maven-metadata.xml")
+    val versions = URL(
+        "https://lightningkite-maven.s3.us-west-2.amazonaws.com/${
+            group.replace(
+                '.',
+                '/'
+            )
+        }/$artifact/maven-metadata.xml"
+    )
         .readText()
         .let { XmlParser().parse(it) }
         .get("versioning")
@@ -157,14 +183,24 @@ fun latestFromRemote(group: String, artifact: String, major: Int, minor: Int? = 
         .toString()
 }
 
-fun Project.lk(minor: Int = 0, setup: LkGradleHelpers.()->Unit) = LkGradleHelpers(minor, this).also(setup)
-class LkGradleHelpers(val versionMinor: Int = 0, val project: Project) {
+private val versionCache = WeakHashMap<Project, String>()
+
+fun Project.lk(setup: LkGradleHelpers.() -> Unit) = LkGradleHelpers(this).also(setup)
+
+@Deprecated("Remove minor, now set with gradle property 'versionMinor'")
+fun Project.lk(minor: Int, setup: LkGradleHelpers.() -> Unit = {}) = LkGradleHelpers(this).also(setup)
+class LkGradleHelpers(val project: Project) {
     val versionMajor = project.rootDir.getGitBranch().let {
-        if(it.startsWith("version-")) it.removePrefix("version-").toIntOrNull() ?: 0
+        if (it.startsWith("version-")) it.removePrefix("version-").toIntOrNull() ?: 0
         else 0
     }
+    val versionMinor: Int = (project.findProperty("versionMinor") as? String)?.toIntOrNull() ?: 0
     fun gitBasedVersion(): String {
-        return project.rootDir.gitBasedVersion(versionMajor, versionMinor)?.toString() ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
+        return versionCache.getOrPut(project.rootProject) {
+            val v = project.rootDir.gitBasedVersion(versionMajor, versionMinor)?.toString()
+                ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
+            v
+        }
     }
 
     val lockFile = project.projectDir.resolve("mavenOrLocal.lock")
@@ -183,16 +219,17 @@ class LkGradleHelpers(val versionMinor: Int = 0, val project: Project) {
     private fun requireProject(gitUrl: String): File {
         val projectName = gitUrl.removeSuffix(".git").substringAfterLast('/')
         val folder = File(branchModeProjectsFolder!!).resolve(projectName)
-        if(!folder.exists()) folder.parentFile.runCli("git", "clone", gitUrl)
+        if (!folder.exists()) folder.parentFile.runCli("git", "clone", gitUrl)
         return folder
     }
+
     fun mavenOrLocal(gitUrl: String, group: String, artifact: String, major: Int, minor: Int? = null): Any {
         return branchModeProjectsFolder?.let(::File)?.let {
             // get current remote version
             val folder = requireProject(gitUrl)
-            if(major != 0) {
-                if(folder.getGitBranch() != "version-$major") {
-                    if(folder.getGitStatus().let { it.workingTreeClean && it.ahead == 0 }) {
+            if (major != 0) {
+                if (folder.getGitBranch() != "version-$major") {
+                    if (folder.getGitStatus().let { it.workingTreeClean && it.ahead == 0 }) {
                         folder.runCli("git", "checkout", "version-$major")
                     } else {
                         throw IllegalStateException("$folder: Need to get to a clean state before you can switch branches")
@@ -206,19 +243,22 @@ class LkGradleHelpers(val versionMinor: Int = 0, val project: Project) {
                 ?.substringAfter(": ")
                 ?: run {
                     println("WARNING: Could not get version from $folder!")
-                    lockFileContents["$group:$artifact"] ?: throw IllegalStateException("No findable local version of $group:$artifact from $folder")
+                    lockFileContents["$group:$artifact"]
+                        ?: throw IllegalStateException("No findable local version of $group:$artifact from $folder")
                 }
             lockFileContents = lockFileContents + ("$group:$artifact" to version)
             "$group:$artifact:$version"
         } ?: run {
-            val lockVersion = if(upgradeLockToLatest?.toBoolean() == true) latestFromRemote(group, artifact, major, minor)
-            else lockFileContents["$group:$artifact"] ?: latestFromRemote(group, artifact, major, minor)
+            val lockVersion =
+                if (upgradeLockToLatest?.toBoolean() == true) latestFromRemote(group, artifact, major, minor)
+                else lockFileContents["$group:$artifact"] ?: latestFromRemote(group, artifact, major, minor)
             "$group:$artifact:$lockVersion"
         }
     }
+
     init {
         project.repositories {
-            if(branchModeProjectsFolder != null) mavenLocal()
+            if (branchModeProjectsFolder != null) mavenLocal()
             maven("https://lightningkite-maven.s3.us-west-2.amazonaws.com")
             mavenCentral()
             google()
@@ -255,6 +295,7 @@ fun LkGradleHelpers.kiteUi(major: Int, minor: Int? = null) = mavenOrLocal(
     major = major,
     minor = minor
 )
+
 fun LkGradleHelpers.lightningServerKiteUiClient(major: Int, minor: Int? = null) = mavenOrLocal(
     gitUrl = "git@github.com:lightningkite/lightning-server-kiteui.git",
     group = "com.lightningkite.lightningserver",
@@ -262,6 +303,7 @@ fun LkGradleHelpers.lightningServerKiteUiClient(major: Int, minor: Int? = null) 
     major = major,
     minor = minor
 )
+
 fun LkGradleHelpers.lightningServer(artifact: String, major: Int, minor: Int? = null) = mavenOrLocal(
     gitUrl = "git@github.com:lightningkite/lightning-server.git",
     group = "com.lightningkite.lightningserver",
@@ -269,7 +311,9 @@ fun LkGradleHelpers.lightningServer(artifact: String, major: Int, minor: Int? = 
     major = major,
     minor = minor
 )
+
 class LightningServerPackageSelector(val lkGradleHelpers: LkGradleHelpers, val major: Int, val minor: Int?)
+
 fun LkGradleHelpers.lightningServer(major: Int, minor: Int? = null) = LightningServerPackageSelector(this, major, minor)
 val LightningServerPackageSelector.processor get() = lkGradleHelpers.lightningServer("processor", major, minor)
 val LightningServerPackageSelector.shared get() = lkGradleHelpers.lightningServer("shared", major, minor)

@@ -10,6 +10,11 @@ class HelpersKtTest {
     fun test() {
         println(File(".").getGitBranch())
         println(File(".").getGitHash())
-        println(File(".").getGitTag())
+        println(File(".").gitLatestTag(0, 0))
+    }
+
+    @Test fun tag() {
+        File(".").runCli("git", "describe", "--tags", "--match", "0.0.*")
+            .let(::println)
     }
 }

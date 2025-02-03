@@ -1,14 +1,12 @@
-name: snapshot
+name: TestPullRequest
 
 on:
-  push:
-    branches:
-      - main
-      - version-**
+  pull_request:
+    branches: main
+  workflow_dispatch:
 
 jobs:
-  release:
-    name: Test and Upload SnapShot
+  test_project:
     runs-on: macos-latest
     steps:
 
@@ -32,25 +30,14 @@ jobs:
             ~/.konan
           key: ${{ runner.os }}-${{ hashFiles('**/.lock') }}
 
-      - name: Clean
-        run: ./gradlew clean
-
-      - name: Test
+      - name: Run Tests
         run: ./gradlew test
 
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: test_results
+          name: commitTestResults
           path: |
             build/reports/tests/**
             */build/reports/tests/**
           retention-days: 10
-
-      - name: Build
-        env:
-          ORG_GRADLE_PROJECT_signingKey: ${{ secrets.SIGNING_KEY }}
-          ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.SIGNING_PASSWORD }}
-          ORG_GRADLE_PROJECT_lightningKiteMavenAwsAccessKey: AKIARR4DEGXXROVKYNNP
-          ORG_GRADLE_PROJECT_lightningKiteMavenAwsSecretAccessKey: ${{ secrets.MAVENS3SECRETKEY }}
-        run: ./gradlew publishAllPublicationsToLightningKiteRepository
