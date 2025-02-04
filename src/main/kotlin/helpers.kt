@@ -62,14 +62,11 @@ private fun Project.setupGitHubAction(path: String) {
 }
 
 internal fun File.runCli(vararg args: String): String {
-    println("Running ${args.joinToString(" ")}...")
     val process = ProcessBuilder(*args)
         .directory(this)
         .start()
     process.outputStream.close()
-    return process.inputStream.readAllBytes().toString(Charsets.UTF_8).also {
-        println("Result: '${it.take(2048)}'")
-    }
+    return process.inputStream.readAllBytes().toString(Charsets.UTF_8)
 }
 
 internal fun File.getGitCommitTime(): OffsetDateTime =
@@ -118,9 +115,9 @@ data class Version(val major: Int, val minor: Int, val patch: Int, val postdash:
         private val comparator = compareBy(Version::major, Version::minor, Version::patch)
         fun fromString(string: String): Version {
             val parts = string.substringBefore('-').split(".")
-            val major = parts[0].toInt()
-            val minor = parts[1].toInt()
-            val patch = parts[2].toInt()
+            val major = parts.getOrNull(0)?.toIntOrNull() ?: -1
+            val minor = parts.getOrNull(1)?.toIntOrNull() ?: -1
+            val patch = parts.getOrNull(2)?.toIntOrNull() ?: -1
             return Version(major, minor, patch, string.substringAfter('-', "").takeUnless { it.isBlank() })
         }
     }
@@ -131,7 +128,10 @@ data class Version(val major: Int, val minor: Int, val patch: Int, val postdash:
 
 internal fun File.gitLatestTag(major: Int, minor: Int): Version? =
     runCli("git", "describe", "--tags", "--match", "$major.$minor.*").takeUnless { it.contains("fatal: ", true) }
-        ?.trim()?.takeUnless { it.isBlank() }?.let(Version::fromString)
+        ?.trim()
+        ?.substringBefore('-')
+        ?.takeUnless { it.isBlank() }
+        ?.let(Version::fromString)
 
 internal fun File.gitTagHash(tag: String): String = runCli("git", "rev-list", "-n", "1", tag).trim()
 internal fun File.gitBasedVersion(versionMajor: Int, versionMinor: Int): Version? {
@@ -166,19 +166,23 @@ fun latestFromRemote(group: String, artifact: String, major: Int, minor: Int? = 
             )
         }/$artifact/maven-metadata.xml"
     )
-        .readText()
-        .let { XmlParser().parse(it) }
+        .let { XmlParser().parse(it.openStream()) }
         .get("versioning")
         .let { it as NodeList }
         .first()
         .let { it as Node }
         .get("versions")
         .let { it as NodeList }
+        .first()
+        .let { it as Node }
+        .children()
         .map {
             Version.fromString((it as Node).text())
         }
     return versions
+        .also { println("Versions: $it") }
         .filter { it.major == major && (minor == null || it.minor == minor) }
+        .also { println("Versions matching: $it") }
         .max()
         .toString()
 }
@@ -231,7 +235,9 @@ class LkGradleHelpers(val project: Project) {
                     }
                 }
             }
+            println("Building subproject at ${folder}...")
             folder.runCli("./gradlew", "publishToMavenLocal")
+            println("Built subproject at ${folder}.")
             val version = folder.runCli("./gradlew", "properties")
                 .lines()
                 .find { it.startsWith("version: ") }
@@ -245,8 +251,12 @@ class LkGradleHelpers(val project: Project) {
             "$group:$artifact:$version"
         } ?: run {
             val lockVersion =
-                if (upgradeLockToLatest?.toBoolean() == true) latestFromRemote(group, artifact, major, minor)
-                else lockFileContents["$group:$artifact"] ?: latestFromRemote(group, artifact, major, minor)
+                if (upgradeLockToLatest?.toBoolean() == true) latestFromRemote(group, artifact, major, minor).also {
+                    lockFileContents += "$group:$artifact" to it
+                }
+                else lockFileContents["$group:$artifact"] ?: latestFromRemote(group, artifact, major, minor).also {
+                    lockFileContents += "$group:$artifact" to it
+                }
             "$group:$artifact:$lockVersion"
         }
     }
@@ -261,8 +271,8 @@ class LkGradleHelpers(val project: Project) {
         }
         project.publishing {
             repositories {
-                val lightningKiteMavenAwsAccessKey: String? by project
-                val lightningKiteMavenAwsSecretAccessKey: String? by project
+                val lightningKiteMavenAwsAccessKey: String? = project.findProperty("lightningKiteMavenAwsAccessKey") as? String
+                val lightningKiteMavenAwsSecretAccessKey: String? = project.findProperty("lightningKiteMavenAwsSecretAccessKey") as? String
                 lightningKiteMavenAwsAccessKey?.let { ak ->
                     maven {
                         name = "LightningKite"
@@ -276,9 +286,11 @@ class LkGradleHelpers(val project: Project) {
             }
         }
         project.signing {
-            val signingKey: String? by project
-            val signingPassword: String? by project
-            useInMemoryPgpKeys(signingKey, signingPassword)
+            val signingKey: String? = project.findProperty("signingKey") as? String
+            val signingPassword: String? = project.findProperty("signingPassword") as? String
+            if(signingKey != null) {
+                useInMemoryPgpKeys(signingKey, signingPassword)
+            }
         }
     }
 }
