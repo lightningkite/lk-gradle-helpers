@@ -285,7 +285,7 @@ class LkGradleHelpers(val project: Project) {
         val result = project.rootDir.gitBasedVersion(versionMajor, versionMinor)?.toString()
             ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
         project.rootProject.extraProperties.set("gitBasedVersion", "$myRunId\n$result")
-        project.rootDir.resolve("version.txt").writeText(result)
+        project.rootDir.resolve("local.version.txt").writeText(result)
         return result
     }
 
@@ -308,7 +308,7 @@ class LkGradleHelpers(val project: Project) {
     private fun requireProjectAndGetVersion(gitUrl: String, major: Int): String {
         val projectName = gitUrl.removeSuffix(".git").substringAfterLast('/')
         val folder = File(branchModeProjectsFolder!!).resolve(projectName)
-        var needsBuild = !folder.resolve("version.txt").exists()
+        var needsBuild = !folder.resolve("local.version.txt").exists()
         if (!folder.exists()) {
             println("Cloning $gitUrl into $folder...")
             folder.parentFile.runCli("git", "clone", gitUrl)
@@ -330,9 +330,9 @@ class LkGradleHelpers(val project: Project) {
             folder.runCli("./gradlew", "publishToMavenLocal")
             println("Built subproject at ${folder}.")
         }
-        val version = folder.resolve("version.txt").takeIf { it.exists() }?.readText()
+        val version = folder.resolve("local.version.txt").takeIf { it.exists() }?.readText()
             ?: run {
-                throw IllegalStateException("No findable local version from $folder")
+                throw IllegalStateException("No findable local version in ${folder.resolve("local.version.txt")}; exists? ${folder.resolve("local.version.txt").exists()}")
             }
         return version
     }
@@ -426,7 +426,7 @@ class LkGradleHelpers(val project: Project) {
 
         //Ensure cleanliness precommit hook
         project.rootDir.resolve(".git/hooks/pre-commit").let {
-            if(!it.exists()) {
+            if(!it.exists() && it.parentFile!!.exists()) {
                 it.writeText("""
                     #!/bin/bash
                     echo "Chcecking for 'snapshot' in versions..."
@@ -436,6 +436,14 @@ class LkGradleHelpers(val project: Project) {
                     fi
                 """.trimIndent())
                 it.setExecutable(true)
+            }
+        }
+
+        // Ensure version file in git ignore
+        project.rootDir.resolve(".gitignore").let {
+            val withLs = System.lineSeparator() + "local.version.txt" + System.lineSeparator()
+            if(it.exists() && !it.readText().contains(withLs)) {
+                it.appendText(withLs)
             }
         }
     }
