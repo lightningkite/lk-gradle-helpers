@@ -146,7 +146,7 @@ data class Version(val major: Int, val minor: Int, val patch: Int, val postdash:
 }
 
 internal fun File.gitLatestTag(major: Int, minor: Int): Version? {
-    runCli("git", "fetch", "--tags")
+    runCli("git", "fetch", "--tags", "--force")
     return runCli("git", "tag", "-l", "--sort=-version:refname", "$major.$minor.*")
         .lines()
         .also { println("All matching tags: ${it.joinToString(", ")}") }
@@ -294,7 +294,6 @@ class LkGradleHelpers(val project: Project) {
         val result = project.rootDir.gitBasedVersion(versionMajor, versionMinor)?.toString()
             ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
         project.rootProject.extraProperties.set("gitBasedVersion", "$myRunId\n$result")
-        project.rootDir.resolve("local.version.txt").writeText(result)
         return result
     }
 
@@ -430,6 +429,11 @@ class LkGradleHelpers(val project: Project) {
                     versioningTomlFile.writer()
                 )
                 println("Done.")
+            }
+        }
+        project.afterEvaluate {
+            project.tasks.findByName("publishToMavenLocal")?.doLast {
+                project.rootDir.resolve("local.version.txt").writeText(project.version.toString())
             }
         }
 
