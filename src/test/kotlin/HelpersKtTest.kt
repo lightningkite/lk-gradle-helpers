@@ -3,6 +3,16 @@ package com.lightningkite.deployhelpers
 import groovy.util.Node
 import groovy.util.NodeList
 import groovy.xml.XmlParser
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import net.peanuuutz.tomlkt.Toml
+import net.peanuuutz.tomlkt.TomlInline
+import net.peanuuutz.tomlkt.TomlTable
+import net.peanuuutz.tomlkt.buildTomlTable
+import net.peanuuutz.tomlkt.element
+import net.peanuuutz.tomlkt.encodeToTomlElement
+import net.peanuuutz.tomlkt.literal
+import net.peanuuutz.tomlkt.table
 import org.junit.Test
 import java.io.File
 import java.io.StringReader
@@ -52,5 +62,25 @@ class HelpersKtTest {
             .map {
                 Version.fromString((it as Node).text().also { println(it) })
             }
+    }
+    @Test fun caseFix() {
+        println("org.jetbrains.kotlin.plugin.serialization".camelCase())
+    }
+    @Test fun toml() {
+
+        Toml.decodeFromString(VersionsToml.serializer(), """
+            [versions]
+            kotlinXSerialization="1.7.3"
+            kotlin="2.0.21"
+
+            [libraries]
+            kotlinXJson={module="org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref="kotlinXSerialization"}
+
+            [plugins]
+            serialization={id="org.jetbrains.kotlin.plugin.serialization", version.ref="kotlin"}
+
+        """.trimIndent()).also { println(it) }.also {
+            it.prettyTable().let { Toml.encodeToString(it) }.let { println(it) }
+        }
     }
 }

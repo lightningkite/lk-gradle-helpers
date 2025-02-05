@@ -6,6 +6,7 @@ plugins {
     `kotlin-dsl`
     signing
     `maven-publish`
+    kotlin("plugin.serialization") version "1.9.0"
 }
 val kotlinVersion = "1.9.0"
 
@@ -29,11 +30,12 @@ dependencies {
 
     api(group = "org.jetbrains.kotlin", name = "kotlin-gradle-plugin", version = kotlinVersion)
     api(group = "org.jetbrains.kotlin", name = "kotlin-gradle-plugin-api", version = kotlinVersion)
+    implementation("net.peanuuutz.tomlkt:tomlkt:0.3.7")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test:$kotlinVersion")
 }
 
-version = "main-SNAPSHOT"
+version = "1.0.0"
 
 publishing {
     repositories {

@@ -5,6 +5,18 @@ import com.lightningkite.deployhelpers.signing
 import groovy.util.Node
 import groovy.util.NodeList
 import groovy.xml.XmlParser
+import kotlinx.serialization.Serializable
+import net.peanuuutz.tomlkt.Toml
+import net.peanuuutz.tomlkt.TomlElement
+import net.peanuuutz.tomlkt.TomlInline
+import net.peanuuutz.tomlkt.TomlLiteral
+import net.peanuuutz.tomlkt.TomlTable
+import net.peanuuutz.tomlkt.buildTomlTable
+import net.peanuuutz.tomlkt.decodeFromNativeReader
+import net.peanuuutz.tomlkt.element
+import net.peanuuutz.tomlkt.encodeToNativeWriter
+import net.peanuuutz.tomlkt.literal
+import net.peanuuutz.tomlkt.table
 import org.gradle.api.Project
 import org.gradle.api.credentials.AwsCredentials
 import org.gradle.api.publish.maven.MavenPom
@@ -12,6 +24,7 @@ import org.gradle.api.publish.maven.MavenPomDeveloperSpec
 import org.gradle.api.publish.maven.MavenPomLicenseSpec
 import org.gradle.internal.extensions.core.extra
 import org.gradle.kotlin.dsl.*
+import org.jetbrains.kotlin.gradle.plugin.extraProperties
 import org.jetbrains.kotlin.gradle.targets.js.npm.min
 import java.io.File
 import java.net.URI
@@ -187,7 +200,74 @@ fun latestFromRemote(group: String, artifact: String, major: Int, minor: Int? = 
         .toString()
 }
 
+fun latestFromRemote(id: String, major: Int, minor: Int? = null): String {
+    val versions = URL(
+        "https://lightningkite-maven.s3.us-west-2.amazonaws.com/$id/$id.gradle.plugin/maven-metadata.xml"
+    )
+        .let { XmlParser().parse(it.openStream()) }
+        .get("versioning")
+        .let { it as NodeList }
+        .first()
+        .let { it as Node }
+        .get("versions")
+        .let { it as NodeList }
+        .first()
+        .let { it as Node }
+        .children()
+        .map {
+            Version.fromString((it as Node).text())
+        }
+    return versions
+        .also { println("Versions: $it") }
+        .filter { it.major == major && (minor == null || it.minor == minor) }
+        .also { println("Versions matching: $it") }
+        .max()
+        .toString()
+}
+
 fun Project.lk(setup: LkGradleHelpers.() -> Unit) = LkGradleHelpers(this).also(setup)
+
+@Serializable
+data class VersionsToml(
+    val versions: HashMap<String, String> = HashMap(),
+    val libraries: HashMap<String, VersionsTomlLibrary> = HashMap(),
+    val plugins: HashMap<String, VersionsTomlPlugin> = HashMap(),
+)
+
+@Serializable
+data class VersionsTomlLibrary(
+    val module: String = "",
+    @TomlInline val version: TomlElement = TomlLiteral("0.0.0")
+)
+
+@Serializable
+data class VersionsTomlPlugin(
+    val id: String = "",
+    @TomlInline val version: TomlElement = TomlLiteral("0.0.0")
+)
+
+fun versionsTomlVersionRef(refName: String) = TomlTable(mapOf("ref" to TomlLiteral(refName)))
+fun versionsTomlVersionDirect(version: String) = TomlLiteral(version)
+
+fun VersionsToml.prettyTable(): TomlTable = buildTomlTable {
+    table("versions") {
+        for (entry in versions.entries.sortedBy { it.key }) {
+            literal(entry.key, entry.value)
+        }
+    }
+    table("libraries") {
+        for (entry in libraries.entries.sortedBy { it.key }) {
+            val e = Toml.encodeToTomlElement(VersionsTomlLibrary.serializer(), entry.value)
+            element(entry.key, e, TomlInline())
+        }
+    }
+    table("plugins") {
+        for (entry in plugins.entries.sortedBy { it.key }) {
+            val e = Toml.encodeToTomlElement(VersionsTomlPlugin.serializer(), entry.value)
+            element(entry.key, e, TomlInline())
+        }
+    }
+}
 
 @Deprecated("Remove minor, now set with gradle property 'versionMinor'")
 fun Project.lk(minor: Int, setup: LkGradleHelpers.() -> Unit = {}) = LkGradleHelpers(this).also(setup)
@@ -198,65 +278,100 @@ class LkGradleHelpers(val project: Project) {
     }
     val versionMinor: Int = (project.findProperty("versionMinor") as? String)?.toIntOrNull() ?: 0
     fun gitBasedVersion(): String {
-        return project.rootDir.gitBasedVersion(versionMajor, versionMinor)?.toString()
+        val (runId, existingVersion) = (project.rootProject.extraProperties.let { if(it.has("gitBasedVersion")) it.get("gitBasedVersion") as? String else null } ?: "\n")
+            .split('\n')
+        val myRunId = System.identityHashCode(project.gradle.startParameter).toString()
+        if(myRunId == runId) return existingVersion
+        val result = project.rootDir.gitBasedVersion(versionMajor, versionMinor)?.toString()
             ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
+        project.rootProject.extraProperties.set("gitBasedVersion", "$myRunId\n$result")
+        project.rootDir.resolve("version.txt").writeText(result)
+        return result
     }
 
-    val lockFile = project.projectDir.resolve("mavenOrLocal.lock")
-    var lockFileContents: Map<String, String> = lockFile
-        .takeIf { it.exists() }
-        ?.readLines()
-        ?.map { it.trim() }
-        ?.associate { it.substringBefore(' ') to it.substringAfter(' ') }
-        ?: mapOf()
-        set(value) {
-            field = value
-            lockFile.writeText(value.entries.joinToString("\n") { it.key + " " + it.value })
-        }
+    val versioningTomlFile = project.rootDir.resolve("gradle/libs.versions.toml")
+    val versioningToml = versioningTomlFile.takeIf { it.exists() }?.let {
+        Toml.decodeFromNativeReader(
+            VersionsToml.serializer(),
+            it.reader()
+        )
+    } ?: VersionsToml()
+    val versioningTomlStart = versioningTomlFile.takeIf { it.exists() }?.let {
+        Toml.decodeFromNativeReader(
+            VersionsToml.serializer(),
+            it.reader()
+        )
+    } ?: VersionsToml()
     val branchModeProjectsFolder: String? by project
     val upgradeLockToLatest: String? by project
-    private fun requireProject(gitUrl: String): File {
+
+    private fun requireProjectAndGetVersion(gitUrl: String, major: Int): String {
         val projectName = gitUrl.removeSuffix(".git").substringAfterLast('/')
         val folder = File(branchModeProjectsFolder!!).resolve(projectName)
-        if (!folder.exists()) folder.parentFile.runCli("git", "clone", gitUrl)
-        return folder
-    }
-
-    fun mavenOrLocal(gitUrl: String, group: String, artifact: String, major: Int, minor: Int? = null): Any {
-        return branchModeProjectsFolder?.let(::File)?.let {
-            // get current remote version
-            val folder = requireProject(gitUrl)
-            if (major != 0) {
-                if (folder.getGitBranch() != "version-$major") {
-                    if (folder.getGitStatus().let { it.workingTreeClean && it.ahead == 0 }) {
-                        folder.runCli("git", "checkout", "version-$major")
-                    } else {
-                        throw IllegalStateException("$folder: Need to get to a clean state before you can switch branches")
-                    }
+        var needsBuild = !folder.resolve("version.txt").exists()
+        if (!folder.exists()) {
+            println("Cloning $gitUrl into $folder...")
+            folder.parentFile.runCli("git", "clone", gitUrl)
+            needsBuild = true
+        }
+        if (major != 0) {
+            if (folder.getGitBranch() != "version-$major") {
+                if (folder.getGitStatus().let { it.workingTreeClean && it.ahead == 0 }) {
+                    println("Checking out version-$major for ${folder}...")
+                    folder.runCli("git", "checkout", "version-$major")
+                    needsBuild = true
+                } else {
+                    throw IllegalStateException("$folder: Need to get to a clean state before you can switch branches to 'version-$major'.  It's currently unclean on '${folder.getGitStatus()}'")
                 }
             }
+        }
+        if(needsBuild) {
             println("Building subproject at ${folder}...")
             folder.runCli("./gradlew", "publishToMavenLocal")
             println("Built subproject at ${folder}.")
-            val version = folder.runCli("./gradlew", "properties")
-                .lines()
-                .find { it.startsWith("version: ") }
-                ?.substringAfter(": ")
-                ?: run {
-                    println("WARNING: Could not get version from $folder!")
-                    lockFileContents["$group:$artifact"]
-                        ?: throw IllegalStateException("No findable local version of $group:$artifact from $folder")
-                }
-            lockFileContents = lockFileContents + ("$group:$artifact" to version)
+        }
+        val version = folder.resolve("version.txt").takeIf { it.exists() }?.readText()
+            ?: run {
+                throw IllegalStateException("No findable local version from $folder")
+            }
+        return version
+    }
+
+    fun mavenOrLocalPlugin(gitUrl: String, id: String, major: Int, minor: Int? = null): Any {
+        val camelCased = id.camelCase()
+        return branchModeProjectsFolder?.let(::File)?.let {
+            val version = requireProjectAndGetVersion(gitUrl, major)
+            versioningToml.plugins[camelCased] = VersionsTomlPlugin(id = id, version = versionsTomlVersionDirect(version))
+            "$id:$version"
+        } ?: run {
+            fun useLatest() = latestFromRemote(id, major, minor).also { version ->
+                versioningToml.plugins[camelCased] =
+                    VersionsTomlPlugin(id = id, version = versionsTomlVersionDirect(version))
+            }
+
+            val lockVersion =
+                if (upgradeLockToLatest?.toBoolean() == true) useLatest()
+                else versioningToml.versions[camelCased] ?: useLatest()
+            "$id:$lockVersion"
+        }
+    }
+
+    fun mavenOrLocal(gitUrl: String, group: String, artifact: String, major: Int, minor: Int? = null): Any {
+        val camelCased = "$group $artifact".camelCase()
+        return branchModeProjectsFolder?.let(::File)?.let {
+            val version = requireProjectAndGetVersion(gitUrl, major)
+            versioningToml.libraries[camelCased] =
+                VersionsTomlLibrary(module = "$group:$artifact", version = versionsTomlVersionDirect(version))
             "$group:$artifact:$version"
         } ?: run {
+            fun useLatest() = latestFromRemote(group, artifact, major, minor).also { version ->
+                versioningToml.libraries[camelCased] =
+                    VersionsTomlLibrary(module = "$group:$artifact", version = versionsTomlVersionDirect(version))
+            }
+
             val lockVersion =
-                if (upgradeLockToLatest?.toBoolean() == true) latestFromRemote(group, artifact, major, minor).also {
-                    lockFileContents += "$group:$artifact" to it
-                }
-                else lockFileContents["$group:$artifact"] ?: latestFromRemote(group, artifact, major, minor).also {
-                    lockFileContents += "$group:$artifact" to it
-                }
+                if (upgradeLockToLatest?.toBoolean() == true) useLatest()
+                else versioningToml.versions[camelCased] ?: useLatest()
             "$group:$artifact:$lockVersion"
         }
     }
@@ -269,10 +384,15 @@ class LkGradleHelpers(val project: Project) {
             google()
             maven("https://jitpack.io")
         }
+
         project.publishing {
+            val version = gitBasedVersion()
+            project.version = version
             repositories {
-                val lightningKiteMavenAwsAccessKey: String? = project.findProperty("lightningKiteMavenAwsAccessKey") as? String
-                val lightningKiteMavenAwsSecretAccessKey: String? = project.findProperty("lightningKiteMavenAwsSecretAccessKey") as? String
+                val lightningKiteMavenAwsAccessKey: String? =
+                    project.findProperty("lightningKiteMavenAwsAccessKey") as? String
+                val lightningKiteMavenAwsSecretAccessKey: String? =
+                    project.findProperty("lightningKiteMavenAwsSecretAccessKey") as? String
                 lightningKiteMavenAwsAccessKey?.let { ak ->
                     maven {
                         name = "LightningKite"
@@ -288,8 +408,34 @@ class LkGradleHelpers(val project: Project) {
         project.signing {
             val signingKey: String? = project.findProperty("signingKey") as? String
             val signingPassword: String? = project.findProperty("signingPassword") as? String
-            if(signingKey != null) {
+            if (signingKey != null) {
                 useInMemoryPgpKeys(signingKey, signingPassword)
+            }
+        }
+        project.afterEvaluate {
+            if(versioningToml != versioningTomlStart) {
+                println("Updating versions toml...")
+                Toml.encodeToNativeWriter(
+                    TomlTable.serializer(),
+                    versioningToml.prettyTable(),
+                    versioningTomlFile.writer()
+                )
+                println("Done.")
+            }
+        }
+
+        //Ensure cleanliness precommit hook
+        project.rootDir.resolve(".git/hooks/pre-commit").let {
+            if(!it.exists()) {
+                it.writeText("""
+                    #!/bin/bash
+                    echo "Chcecking for 'snapshot' in versions..."
+                    if grep SNAPSHOT gradle/libs.versions.toml; then
+                      echo "There's a 'snapshot' version in your libs.versions.toml!  You need to have clean versions before you commit."
+                      exit 1
+                    fi
+                """.trimIndent())
+                it.setExecutable(true)
             }
         }
     }
@@ -340,3 +486,20 @@ val LightningServerPackageSelector.scim get() = lkGradleHelpers.lightningServer(
 val LightningServerPackageSelector.sentry get() = lkGradleHelpers.lightningServer("server-sentry", major, minor)
 val LightningServerPackageSelector.sentry9 get() = lkGradleHelpers.lightningServer("server-sentry9", major, minor)
 val LightningServerPackageSelector.sftp get() = lkGradleHelpers.lightningServer("server-sftp", major, minor)
+
+
+val `casing separator regex` = Regex("([-_.\\s]+([A-Z]*[a-z0-9]+))|([.-_\\s]*[A-Z]+)")
+inline fun String.caseAlter(crossinline update: (after: String) -> String): String =
+    `casing separator regex`.replace(this) {
+        if (it.range.start == 0) it.value
+        else update(it.value.filter { !(it == '-' || it == '_' || it.isWhitespace() || it == '.') })
+    }
+
+
+fun String.titleCase() = caseAlter { " " + it.capitalize() }.capitalize()
+fun String.spaceCase() = caseAlter { " " + it }.decapitalize()
+fun String.kabobCase() = caseAlter { "-$it" }.toLowerCase()
+fun String.snakeCase() = caseAlter { "_$it" }.toLowerCase()
+fun String.screamingSnakeCase() = caseAlter { "_$it" }.toUpperCase()
+fun String.camelCase() = caseAlter { it.capitalize() }.decapitalize()
+fun String.pascalCase() = caseAlter { it.capitalize() }.capitalize()
