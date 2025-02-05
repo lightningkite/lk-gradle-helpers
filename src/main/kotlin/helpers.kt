@@ -79,7 +79,13 @@ internal fun File.runCli(vararg args: String): String {
         .directory(this)
         .start()
     process.outputStream.close()
-    return process.inputStream.readAllBytes().toString(Charsets.UTF_8)
+    val result = process.inputStream.readAllBytes().toString(Charsets.UTF_8)
+    val resultErr = process.errorStream.readAllBytes().toString(Charsets.UTF_8)
+    val exitCode = process.waitFor()
+    if(exitCode != 0) {
+        throw Exception("Unexpected exit code ${exitCode} from ${args.joinToString(" ")}: $resultErr $result")
+    }
+    return result
 }
 
 internal fun File.getGitCommitTime(): OffsetDateTime =
@@ -139,12 +145,15 @@ data class Version(val major: Int, val minor: Int, val patch: Int, val postdash:
     fun incrementPatch() = copy(patch = patch + 1)
 }
 
-internal fun File.gitLatestTag(major: Int, minor: Int): Version? =
-    runCli("git", "describe", "--tags", "--match", "$major.$minor.*").takeUnless { it.contains("fatal: ", true) }
+internal fun File.gitLatestTag(major: Int, minor: Int): Version? {
+    runCli("git", "fetch", "--tags")
+    return runCli("git", "tag", "-l", "--sort=-version:refname", "$major.$minor.*")
+        .lines()
+        .also { println("All matching tags: ${it.joinToString(", ")}") }
+        .firstOrNull()
         ?.trim()
-        ?.substringBefore('-')
-        ?.takeUnless { it.isBlank() }
         ?.let(Version::fromString)
+}
 
 internal fun File.gitTagHash(tag: String): String = runCli("git", "rev-list", "-n", "1", tag).trim()
 internal fun File.gitBasedVersion(versionMajor: Int, versionMinor: Int): Version? {
@@ -351,7 +360,7 @@ class LkGradleHelpers(val project: Project) {
 
             val lockVersion =
                 if (upgradeLockToLatest?.toBoolean() == true) useLatest()
-                else versioningToml.versions[camelCased] ?: useLatest()
+                else versioningToml.plugins[camelCased]?.version?.let { it as? TomlLiteral }?.content ?: useLatest()
             "$id:$lockVersion"
         }
     }
@@ -371,7 +380,7 @@ class LkGradleHelpers(val project: Project) {
 
             val lockVersion =
                 if (upgradeLockToLatest?.toBoolean() == true) useLatest()
-                else versioningToml.versions[camelCased] ?: useLatest()
+                else versioningToml.libraries[camelCased]?.version?.let { it as? TomlLiteral }?.content ?: useLatest()
             "$group:$artifact:$lockVersion"
         }
     }

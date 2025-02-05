@@ -31,6 +31,9 @@ class HelpersKtTest {
         File(".").runCli("git", "describe", "--tags", "--match", "0.0.*")
             .let(::println)
     }
+    @Test fun tag2() {
+        File("/Users/jivie/Projects/kotlinx-serialization-csv-durable").gitLatestTag(0, 2).let(::println)
+    }
 
     @Test fun parseVersions() {
         """
