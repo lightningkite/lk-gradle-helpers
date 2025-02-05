@@ -426,10 +426,10 @@ class LkGradleHelpers(val project: Project) {
 
         //Ensure cleanliness precommit hook
         project.rootDir.resolve(".git/hooks/pre-commit").let {
-            if(!it.exists() && it.parentFile!!.exists()) {
+            if((!it.exists() || it.readText().startsWith("#!/bin/bash")) && it.parentFile!!.exists()) {
                 it.writeText("""
-                    #!/bin/bash
-                    echo "Chcecking for 'snapshot' in versions..."
+                    #!/bin/sh
+                    echo "Checking for 'snapshot' in versions..."
                     if grep SNAPSHOT gradle/libs.versions.toml; then
                       echo "There's a 'snapshot' version in your libs.versions.toml!  You need to have clean versions before you commit."
                       exit 1
