@@ -24,6 +24,7 @@ import org.gradle.api.publish.maven.MavenPomDeveloperSpec
 import org.gradle.api.publish.maven.MavenPomLicenseSpec
 import org.gradle.internal.extensions.core.extra
 import org.gradle.kotlin.dsl.*
+import org.gradle.plugins.signing.Sign
 import org.jetbrains.kotlin.gradle.plugin.extraProperties
 import org.jetbrains.kotlin.gradle.targets.js.npm.min
 import java.io.File
@@ -413,12 +414,22 @@ class LkGradleHelpers(val project: Project) {
                 }
             }
         }
-        project.signing {
-            val signingKey: String? = project.findProperty("signingKey") as? String
-            val signingPassword: String? = project.findProperty("signingPassword") as? String
-            if (signingKey != null) {
-                useInMemoryPgpKeys(signingKey, signingPassword)
+        val signingKey: String? = project.findProperty("signingKey") as? String
+        if(signingKey != null) {
+            project.signing {
+                isRequired = false
+                val signingPassword: String? = project.findProperty("signingPassword") as? String
+                if (signingKey != null) {
+                    useInMemoryPgpKeys(signingKey, signingPassword)
+                }
             }
+        } else {
+            project.afterEvaluate {
+                project.tasks.withType<Sign>().configureEach {
+                    onlyIf("'signingKey' is present") { false }
+                }
+            }
+
         }
         project.afterEvaluate {
             if(versioningToml != versioningTomlStart) {
@@ -466,6 +477,12 @@ fun LkGradleHelpers.kiteUi(major: Int, minor: Int? = null) = mavenOrLocal(
     gitUrl = "git@github.com:lightningkite/kiteui.git",
     group = "com.lightningkite.kiteui",
     artifact = "library",
+    major = major,
+    minor = minor
+)
+fun LkGradleHelpers.kiteUiPlugin(major: Int, minor: Int? = null) = mavenOrLocalPlugin(
+    gitUrl = "git@github.com:lightningkite/kiteui.git",
+    id = "com.lightningkite.kiteui",
     major = major,
     minor = minor
 )

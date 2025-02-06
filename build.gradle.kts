@@ -39,8 +39,8 @@ version = "1.0.8"
 
 publishing {
     repositories {
-        val lightningKiteMavenAwsAccessKey: String? by project.properties
-        val lightningKiteMavenAwsSecretAccessKey: String? by project.properties
+        val lightningKiteMavenAwsAccessKey: String? = project.findProperty("lightningKiteMavenAwsAccessKey") as? String
+        val lightningKiteMavenAwsSecretAccessKey: String? = project.findProperty("lightningKiteMavenAwsSecretAccessKey") as? String
         lightningKiteMavenAwsAccessKey?.let { ak ->
             maven {
                 name = "LightningKite"
