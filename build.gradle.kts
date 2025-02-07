@@ -35,7 +35,7 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test:$kotlinVersion")
 }
 
-version = "1.0.8"
+version = "1.1.0"
 
 publishing {
     repositories {

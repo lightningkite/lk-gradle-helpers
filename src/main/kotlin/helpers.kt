@@ -32,6 +32,7 @@ import java.net.URI
 import java.net.URL
 import java.time.OffsetDateTime
 import java.util.WeakHashMap
+import kotlin.text.toBoolean
 
 private class MarkerClass
 
@@ -83,7 +84,7 @@ internal fun File.runCli(vararg args: String): String {
     val result = process.inputStream.readAllBytes().toString(Charsets.UTF_8)
     val resultErr = process.errorStream.readAllBytes().toString(Charsets.UTF_8)
     val exitCode = process.waitFor()
-    if(exitCode != 0) {
+    if (exitCode != 0) {
         throw Exception("Unexpected exit code ${exitCode} from ${args.joinToString(" ")}: $resultErr $result")
     }
     return result
@@ -288,10 +289,14 @@ class LkGradleHelpers(val project: Project) {
     }
     val versionMinor: Int = (project.findProperty("versionMinor") as? String)?.toIntOrNull() ?: 0
     fun gitBasedVersion(): String {
-        val (runId, existingVersion) = (project.rootProject.extraProperties.let { if(it.has("gitBasedVersion")) it.get("gitBasedVersion") as? String else null } ?: "\n")
+        val (runId, existingVersion) = (project.rootProject.extraProperties.let {
+            if (it.has("gitBasedVersion")) it.get(
+                "gitBasedVersion"
+            ) as? String else null
+        } ?: "\n")
             .split('\n')
         val myRunId = System.identityHashCode(project.gradle.startParameter).toString()
-        if(myRunId == runId) return existingVersion
+        if (myRunId == runId) return existingVersion
         val result = project.rootDir.gitBasedVersion(versionMajor, versionMinor)?.toString()
             ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
         project.rootProject.extraProperties.set("gitBasedVersion", "$myRunId\n$result")
@@ -311,8 +316,20 @@ class LkGradleHelpers(val project: Project) {
             it.reader()
         )
     } ?: VersionsToml()
-    val branchModeProjectsFolder: String? by project
-    val upgradeLockToLatest: String? by project
+    val branchModeProjectsFolder: String? = (
+            (project.findProperty("branchModeProjectsFolderOverride") as? String)
+                ?: (project.findProperty("branchModeProjectsFolder") as? String)
+            )
+        ?.takeUnless { it.isBlank() || it == "off" || it == "false" }
+        .also { if (it != null) println("Branch mode active ($it)") }
+    val upgradeLockToLatest: Boolean = (
+            (project.findProperty("upgradeLockToLatestOverride") as? String)
+                ?: (project.findProperty("upgradeLockToLatest") as? String)
+            )
+        ?.takeUnless { it.isBlank() || it == "off" || it == "false" }
+        ?.toBoolean()
+        .let { it ?: false }
+        .also { if (it) println("Upgrade lock to latest enabled") }
 
     private fun requireProjectAndGetVersion(gitUrl: String, major: Int): String {
         val projectName = gitUrl.removeSuffix(".git").substringAfterLast('/')
@@ -334,14 +351,20 @@ class LkGradleHelpers(val project: Project) {
                 }
             }
         }
-        if(needsBuild) {
+        if (needsBuild) {
             println("Building subproject at ${folder}...")
             folder.runCli("./gradlew", "publishToMavenLocal")
             println("Built subproject at ${folder}.")
         }
         val version = folder.resolve("local.version.txt").takeIf { it.exists() }?.readText()
             ?: run {
-                throw IllegalStateException("No findable local version in ${folder.resolve("local.version.txt")}; exists? ${folder.resolve("local.version.txt").exists()}")
+                throw IllegalStateException(
+                    "No findable local version in ${folder.resolve("local.version.txt")}; exists? ${
+                        folder.resolve(
+                            "local.version.txt"
+                        ).exists()
+                    }"
+                )
             }
         return version
     }
@@ -350,7 +373,8 @@ class LkGradleHelpers(val project: Project) {
         val camelCased = id.camelCase()
         return branchModeProjectsFolder?.let(::File)?.let {
             val version = requireProjectAndGetVersion(gitUrl, major)
-            versioningToml.plugins[camelCased] = VersionsTomlPlugin(id = id, version = versionsTomlVersionDirect(version))
+            versioningToml.plugins[camelCased] =
+                VersionsTomlPlugin(id = id, version = versionsTomlVersionDirect(version))
             "$id:$version"
         } ?: run {
             fun useLatest() = latestFromRemote(id, major, minor).also { version ->
@@ -359,7 +383,7 @@ class LkGradleHelpers(val project: Project) {
             }
 
             val lockVersion =
-                if (upgradeLockToLatest?.toBoolean() == true) useLatest()
+                if (upgradeLockToLatest) useLatest()
                 else versioningToml.plugins[camelCased]?.version?.let { it as? TomlLiteral }?.content ?: useLatest()
             "$id:$lockVersion"
         }
@@ -379,7 +403,7 @@ class LkGradleHelpers(val project: Project) {
             }
 
             val lockVersion =
-                if (upgradeLockToLatest?.toBoolean() == true) useLatest()
+                if (upgradeLockToLatest) useLatest()
                 else versioningToml.libraries[camelCased]?.version?.let { it as? TomlLiteral }?.content ?: useLatest()
             "$group:$artifact:$lockVersion"
         }
@@ -415,7 +439,7 @@ class LkGradleHelpers(val project: Project) {
             }
         }
         val signingKey: String? = project.findProperty("signingKey") as? String
-        if(signingKey != null) {
+        if (signingKey != null) {
             project.signing {
                 isRequired = false
                 val signingPassword: String? = project.findProperty("signingPassword") as? String
@@ -432,7 +456,7 @@ class LkGradleHelpers(val project: Project) {
 
         }
         project.afterEvaluate {
-            if(versioningToml != versioningTomlStart) {
+            if (versioningToml != versioningTomlStart) {
                 println("Updating versions toml...")
                 Toml.encodeToNativeWriter(
                     TomlTable.serializer(),
@@ -450,15 +474,17 @@ class LkGradleHelpers(val project: Project) {
 
         //Ensure cleanliness precommit hook
         project.rootDir.resolve(".git/hooks/pre-commit").let {
-            if((!it.exists() || it.readText().startsWith("#!/bin/bash")) && it.parentFile!!.exists()) {
-                it.writeText("""
+            if ((!it.exists() || it.readText().startsWith("#!/bin/bash")) && it.parentFile!!.exists()) {
+                it.writeText(
+                    """
                     #!/bin/sh
                     echo "Checking for 'snapshot' in versions..."
                     if grep SNAPSHOT gradle/libs.versions.toml; then
                       echo "There's a 'snapshot' version in your libs.versions.toml!  You need to have clean versions before you commit."
                       exit 1
                     fi
-                """.trimIndent())
+                """.trimIndent()
+                )
                 it.setExecutable(true)
             }
         }
@@ -466,7 +492,7 @@ class LkGradleHelpers(val project: Project) {
         // Ensure version file in git ignore
         project.rootDir.resolve(".gitignore").let {
             val withLs = System.lineSeparator() + "local.version.txt" + System.lineSeparator()
-            if(it.exists() && !it.readText().contains(withLs)) {
+            if (it.exists() && !it.readText().contains(withLs)) {
                 it.appendText(withLs)
             }
         }
@@ -480,6 +506,7 @@ fun LkGradleHelpers.kiteUi(major: Int, minor: Int? = null) = mavenOrLocal(
     major = major,
     minor = minor
 )
+
 fun LkGradleHelpers.kiteUiPlugin(major: Int, minor: Int? = null) = mavenOrLocalPlugin(
     gitUrl = "git@github.com:lightningkite/kiteui.git",
     id = "com.lightningkite.kiteui",
