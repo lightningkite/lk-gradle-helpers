@@ -153,6 +153,7 @@ internal fun File.gitLatestTag(major: Int, minor: Int): Version? {
         .lines()
         .also { println("All matching tags: ${it.joinToString(", ")}") }
         .firstOrNull()
+        ?.takeUnless { it.isBlank() }
         ?.trim()
         ?.let(Version::fromString)
 }
@@ -164,16 +165,16 @@ internal fun File.gitBasedVersion(versionMajor: Int, versionMinor: Int): Version
         return null
     }
     val hash = getGitHash()
-    val latest = gitLatestTag(versionMajor, versionMinor) ?: Version(versionMajor, versionMinor, -1)
+    val latest = gitLatestTag(versionMajor, versionMinor)
     println("Current hash: $hash")
     println("Latest tag: $latest")
-    if (gitTagHash(latest.toString()) == hash) {
+    if (latest != null && gitTagHash(latest.toString()) == hash) {
         // OK, we've already made the tag!
         println("Tag is up to date.")
         return latest
     } else {
         println("Creating new tag...")
-        val newTag = latest.incrementPatch()
+        val newTag = (latest ?: Version(versionMajor, versionMinor, -1)).incrementPatch()
         runCli("git", "tag", newTag.toString())
         runCli("git", "push", "origin", "tag", newTag.toString())
         println("New tag created.")
@@ -526,6 +527,20 @@ fun LkGradleHelpers.lightningServer(artifact: String, major: Int, minor: Int? = 
     gitUrl = "git@github.com:lightningkite/lightning-server.git",
     group = "com.lightningkite.lightningserver",
     artifact = artifact,
+    major = major,
+    minor = minor
+)
+
+fun LkGradleHelpers.kotlinTestManualPlugin(major: Int = 0, minor: Int? = null) = mavenOrLocalPlugin(
+    gitUrl = "git@github.com:lightningkite/kotlin-test-manual.git",
+    id = "com.lightningkite.testing.manual",
+    major = major,
+    minor = minor
+)
+fun LkGradleHelpers.kotlinTestManualRuntime(major: Int = 0, minor: Int? = null) = mavenOrLocal(
+    gitUrl = "git@github.com:lightningkite/kotlin-test-manual.git",
+    group = "com.lightningkite.testing",
+    artifact = "kotlin-test-manual-runtime",
     major = major,
     minor = minor
 )
