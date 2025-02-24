@@ -342,7 +342,7 @@ class LkGradleHelpers(val project: Project) {
             needsBuild = true
         }
         if (major != 0) {
-            if (folder.getGitBranch() != "version-$major") {
+            if (!folder.getGitBranch().startsWith("version-$major")) {
                 if (folder.getGitStatus().let { it.workingTreeClean && it.ahead == 0 }) {
                     println("Checking out version-$major for ${folder}...")
                     folder.runCli("git", "checkout", "version-$major")
