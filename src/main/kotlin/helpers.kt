@@ -503,6 +503,14 @@ class LkGradleHelpers(val project: Project) {
     }
 }
 
+fun LkGradleHelpers.readable(major: Int, minor: Int? = null) = mavenOrLocal(
+    gitUrl = "git@github.com:lightningkite/readable.git",
+    group = "com.lightningkite",
+    artifact = "readable",
+    major = major,
+    minor = minor
+)
+
 fun LkGradleHelpers.kiteUi(major: Int, minor: Int? = null) = mavenOrLocal(
     gitUrl = "git@github.com:lightningkite/kiteui.git",
     group = "com.lightningkite.kiteui",
