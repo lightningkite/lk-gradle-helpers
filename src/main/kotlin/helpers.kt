@@ -96,6 +96,7 @@ internal fun File.getGitCommitTime(): OffsetDateTime =
 internal fun File.getGitBranch(): String = runCli("git", "rev-parse", "--abbrev-ref", "HEAD").trim()
 internal fun File.getGitHash(): String = runCli("git", "rev-parse", "HEAD").trim()
 internal data class GitStatus(
+    val raw: String,
     val branch: String,
     val workingTreeClean: Boolean,
     val ahead: Int,
@@ -106,6 +107,7 @@ internal data class GitStatus(
 
 internal fun File.getGitStatus(): GitStatus = runCli("git", "status").let {
     GitStatus(
+        raw = it,
         branch = it.substringAfter("On branch ", "").substringBefore('\n').trim(),
         workingTreeClean = it.contains("working tree clean", ignoreCase = true),
         ahead = it.substringAfter("Your branch is ahead", "")
@@ -160,8 +162,9 @@ internal fun File.gitLatestTag(major: Int, minor: Int): Version? {
 
 internal fun File.gitTagHash(tag: String): String = runCli("git", "rev-list", "-n", "1", tag).trim()
 internal fun File.gitBasedVersion(versionMajor: Int, versionMinor: Int): Version? {
-    if (!getGitStatus().fullyPushed) {
-        println("Not fully pushed, using snapshot version")
+    val status = getGitStatus()
+    if (!status.fullyPushed) {
+        println("Not fully pushed, using snapshot version.  Raw status of Git: ${status.raw}")
         return null
     }
     val hash = getGitHash()
