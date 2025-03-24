@@ -269,6 +269,7 @@ data class VersionsTomlPlugin(
 fun versionsTomlVersionStrictly(version: String) = TomlTable(mapOf("strictly" to TomlLiteral(version)))
 fun versionsTomlVersionRef(refName: String) = TomlTable(mapOf("ref" to TomlLiteral(refName)))
 fun versionsTomlVersionDirect(version: String) = TomlLiteral(version)
+fun versionsTomlVersionStrictlyIfSnapshot(version: String) = if(version.contains("snapshot", true)) versionsTomlVersionStrictly(version) else versionsTomlVersionDirect(version)
 
 fun VersionsToml.prettyTable(): TomlTable = buildTomlTable {
     table("versions") {
@@ -388,7 +389,7 @@ class LkGradleHelpers(val project: Project) {
         return branchModeProjectsFolder?.let(::File)?.let {
             val version = requireProjectAndGetVersion(gitUrl, major)
             versioningToml.plugins[camelCased] =
-                VersionsTomlPlugin(id = id, version = versionsTomlVersionStrictly(version))
+                VersionsTomlPlugin(id = id, version = versionsTomlVersionStrictlyIfSnapshot(version))
             "$id:$version"
         } ?: run {
             fun useLatest() = latestFromRemote(id, major, minor).also { version ->
@@ -408,7 +409,7 @@ class LkGradleHelpers(val project: Project) {
         return branchModeProjectsFolder?.let(::File)?.let {
             val version = requireProjectAndGetVersion(gitUrl, major)
             versioningToml.libraries[camelCased] =
-                VersionsTomlLibrary(module = "$group:$artifact", version = versionsTomlVersionStrictly(version))
+                VersionsTomlLibrary(module = "$group:$artifact", version = versionsTomlVersionStrictlyIfSnapshot(version))
             "$group:$artifact:$version"
         } ?: run {
             fun useLatest() = latestFromRemote(group, artifact, major, minor).also { version ->
