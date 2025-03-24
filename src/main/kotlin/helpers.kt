@@ -94,6 +94,12 @@ internal fun File.getGitCommitTime(): OffsetDateTime =
     OffsetDateTime.parse(runCli("git", "show", "--no-patch", "--format=%ci", "HEAD").trim())
 
 internal fun File.getGitBranch(): String = runCli("git", "rev-parse", "--abbrev-ref", "HEAD").trim()
+internal fun File.getGitTag(): Version? = try {
+    runCli("git", "describe", "--exact-match", "--tags").trim().let(Version::fromString)
+} catch (e: Exception) {
+    null
+}
+
 internal fun File.getGitHash(): String = runCli("git", "rev-parse", "HEAD").trim()
 internal data class GitStatus(
     val raw: String,
@@ -150,7 +156,6 @@ data class Version(val major: Int, val minor: Int, val patch: Int, val postdash:
 }
 
 internal fun File.gitLatestTag(major: Int, minor: Int): Version? {
-    runCli("git", "fetch", "--tags", "--force")
     return runCli("git", "tag", "-l", "--sort=-version:refname", "$major.$minor.*")
         .lines()
         .also { println("All matching tags: ${it.joinToString(", ")}") }
@@ -161,28 +166,28 @@ internal fun File.gitLatestTag(major: Int, minor: Int): Version? {
 }
 
 internal fun File.gitTagHash(tag: String): String = runCli("git", "rev-list", "-n", "1", tag).trim()
-internal fun File.gitBasedVersion(versionMajor: Int, versionMinor: Int): Version? {
+internal fun File.gitBasedVersion(versionMajor: Int, versionMinor: Int, canCreateTag: Boolean = true): Version? {
+    runCli("git", "fetch", "--tags", "--force") // ensure we're up to date
     val status = getGitStatus()
     if (!status.fullyPushed) {
         println("Not fully pushed, using snapshot version.  Raw status of Git: ${status.raw}")
         return null
     }
-    val hash = getGitHash()
-    val latest = gitLatestTag(versionMajor, versionMinor)
-    println("Current hash: $hash")
-    println("Latest tag: $latest")
-    if (latest != null && gitTagHash(latest.toString()) == hash) {
+    val current = getGitTag()
+    println("Current tag: $current")
+    return if (current != null) {
         // OK, we've already made the tag!
         println("Tag is up to date.")
-        return latest
-    } else {
+        current
+    } else if(canCreateTag) {
+        val latest = gitLatestTag(versionMajor, versionMinor)
         println("Creating new tag...")
         val newTag = (latest ?: Version(versionMajor, versionMinor, -1)).incrementPatch()
         runCli("git", "tag", newTag.toString())
         runCli("git", "push", "origin", "tag", newTag.toString())
         println("New tag created.")
-        return newTag
-    }
+        newTag
+    } else null
 }
 
 fun latestFromRemote(group: String, artifact: String, major: Int, minor: Int? = null): String {
@@ -244,7 +249,7 @@ fun Project.lk(setup: LkGradleHelpers.() -> Unit) = LkGradleHelpers(this).also(s
 
 @Serializable
 data class VersionsToml(
-    val versions: HashMap<String, String> = HashMap(),
+    val versions: HashMap<String, TomlElement> = HashMap(),
     val libraries: HashMap<String, VersionsTomlLibrary> = HashMap(),
     val plugins: HashMap<String, VersionsTomlPlugin> = HashMap(),
 )
@@ -261,13 +266,14 @@ data class VersionsTomlPlugin(
     @TomlInline val version: TomlElement = TomlLiteral("0.0.0")
 )
 
+fun versionsTomlVersionStrictly(version: String) = TomlTable(mapOf("strictly" to TomlLiteral(version)))
 fun versionsTomlVersionRef(refName: String) = TomlTable(mapOf("ref" to TomlLiteral(refName)))
 fun versionsTomlVersionDirect(version: String) = TomlLiteral(version)
 
 fun VersionsToml.prettyTable(): TomlTable = buildTomlTable {
     table("versions") {
         for (entry in versions.entries.sortedBy { it.key }) {
-            literal(entry.key, entry.value)
+            element(entry.key, entry.value)
         }
     }
     table("libraries") {
@@ -284,13 +290,17 @@ fun VersionsToml.prettyTable(): TomlTable = buildTomlTable {
     }
 }
 
+val permitCheckout = false
+
 @Deprecated("Remove minor, now set with gradle property 'versionMinor'")
 fun Project.lk(minor: Int, setup: LkGradleHelpers.() -> Unit = {}) = LkGradleHelpers(this).also(setup)
 class LkGradleHelpers(val project: Project) {
-    val versionMajor = project.rootDir.getGitBranch().let {
-        if (it.startsWith("version-")) it.removePrefix("version-").toIntOrNull() ?: 0
+    val branch = project.rootDir.getGitBranch()
+    val versionMajor = branch.let {
+        if (it.startsWith("version-")) it.removePrefix("version-").substringBefore('-').toIntOrNull() ?: 0
         else 0
     }
+    val versionBranch = branch.removePrefix("version-").substringAfter('-', "").takeUnless { it.isBlank() }
     val versionMinor: Int = (project.findProperty("versionMinor") as? String)?.toIntOrNull() ?: 0
     fun gitBasedVersion(): String {
         val (runId, existingVersion) = (project.rootProject.extraProperties.let {
@@ -301,7 +311,7 @@ class LkGradleHelpers(val project: Project) {
             .split('\n')
         val myRunId = System.identityHashCode(project.gradle.startParameter).toString()
         if (myRunId == runId) return existingVersion
-        val result = project.rootDir.gitBasedVersion(versionMajor, versionMinor)?.toString()
+        val result = project.rootDir.gitBasedVersion(versionMajor, versionMinor, canCreateTag = versionBranch == null)?.toString()
             ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
         project.rootProject.extraProperties.set("gitBasedVersion", "$myRunId\n$result")
         return result
@@ -346,7 +356,7 @@ class LkGradleHelpers(val project: Project) {
         }
         if (major != 0) {
             if (!folder.getGitBranch().startsWith("version-$major")) {
-                if (folder.getGitStatus().let { it.workingTreeClean && it.ahead == 0 }) {
+                if (folder.getGitStatus().let { it.workingTreeClean && it.ahead == 0 } && permitCheckout) {
                     println("Checking out version-$major for ${folder}...")
                     folder.runCli("git", "checkout", "version-$major")
                     needsBuild = true
@@ -378,7 +388,7 @@ class LkGradleHelpers(val project: Project) {
         return branchModeProjectsFolder?.let(::File)?.let {
             val version = requireProjectAndGetVersion(gitUrl, major)
             versioningToml.plugins[camelCased] =
-                VersionsTomlPlugin(id = id, version = versionsTomlVersionDirect(version))
+                VersionsTomlPlugin(id = id, version = versionsTomlVersionStrictly(version))
             "$id:$version"
         } ?: run {
             fun useLatest() = latestFromRemote(id, major, minor).also { version ->
@@ -398,7 +408,7 @@ class LkGradleHelpers(val project: Project) {
         return branchModeProjectsFolder?.let(::File)?.let {
             val version = requireProjectAndGetVersion(gitUrl, major)
             versioningToml.libraries[camelCased] =
-                VersionsTomlLibrary(module = "$group:$artifact", version = versionsTomlVersionDirect(version))
+                VersionsTomlLibrary(module = "$group:$artifact", version = versionsTomlVersionStrictly(version))
             "$group:$artifact:$version"
         } ?: run {
             fun useLatest() = latestFromRemote(group, artifact, major, minor).also { version ->
@@ -548,6 +558,7 @@ fun LkGradleHelpers.kotlinTestManualPlugin(major: Int = 0, minor: Int? = null) =
     major = major,
     minor = minor
 )
+
 fun LkGradleHelpers.kotlinTestManualRuntime(major: Int = 0, minor: Int? = null) = mavenOrLocal(
     gitUrl = "git@github.com:lightningkite/kotlin-test-manual.git",
     group = "com.lightningkite.testing",
