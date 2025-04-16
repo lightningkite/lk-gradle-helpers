@@ -384,7 +384,7 @@ class LkGradleHelpers(val project: Project) {
         return version
     }
 
-    fun mavenOrLocalPlugin(gitUrl: String, id: String, major: Int, minor: Int? = null): Any {
+    fun mavenOrLocalPlugin(gitUrl: String, id: String, major: Int, minor: Int? = null): String {
         val camelCased = id.camelCase()
         return branchModeProjectsFolder?.let(::File)?.let {
             val version = requireProjectAndGetVersion(gitUrl, major)
@@ -404,7 +404,7 @@ class LkGradleHelpers(val project: Project) {
         }
     }
 
-    fun mavenOrLocal(gitUrl: String, group: String, artifact: String, major: Int, minor: Int? = null): Any {
+    fun mavenOrLocal(gitUrl: String, group: String, artifact: String, major: Int, minor: Int? = null): String {
         val camelCased = "$group $artifact".camelCase()
         return branchModeProjectsFolder?.let(::File)?.let {
             val version = requireProjectAndGetVersion(gitUrl, major)
@@ -541,6 +541,14 @@ fun LkGradleHelpers.lightningServerKiteUiClient(major: Int, minor: Int? = null) 
     gitUrl = "git@github.com:lightningkite/lightning-server-kiteui.git",
     group = "com.lightningkite.lightningserver",
     artifact = "client",
+    major = major,
+    minor = minor
+)
+
+fun LkGradleHelpers.jsOptimizedConstructs(major: Int, minor: Int? = null) = mavenOrLocal(
+    gitUrl = "git@github.com:lightningkite/js-optimized-constructs.git",
+    group = "com.lightningkite",
+    artifact = "js-optimized-constructs",
     major = major,
     minor = minor
 )
