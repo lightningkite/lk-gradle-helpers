@@ -166,20 +166,24 @@ internal fun File.gitLatestTag(major: Int, minor: Int): Version? {
 }
 
 internal fun File.gitTagHash(tag: String): String = runCli("git", "rev-list", "-n", "1", tag).trim()
-internal fun File.gitBasedVersion(versionMajor: Int, versionMinor: Int, canCreateTag: Boolean = true): Version? {
-    runCli("git", "fetch", "--tags", "--force") // ensure we're up to date
+internal fun File.gitBasedVersion(versionMajor: Int, versionMinor: Int, canCreateTag: Boolean = true, offlineMode: Boolean): Version? {
     val status = getGitStatus()
     if (!status.fullyPushed) {
         println("Not fully pushed, using snapshot version.  Raw status of Git: ${status.raw}")
         return null
     }
-    val current = getGitTag()
+    var current = getGitTag()
+    if (current == null && !offlineMode) {
+        println("Pulling tags from remote")
+        runCli("git", "fetch", "--tags", "--force") // ensure we're up to date
+        current = getGitTag()
+    }
     println("Current tag: $current")
     return if (current != null) {
         // OK, we've already made the tag!
         println("Tag is up to date.")
         current
-    } else if(canCreateTag) {
+    } else if (canCreateTag && !offlineMode) {
         val latest = gitLatestTag(versionMajor, versionMinor)
         println("Creating new tag...")
         val newTag = (latest ?: Version(versionMajor, versionMinor, -1)).incrementPatch()
@@ -257,19 +261,20 @@ data class VersionsToml(
 @Serializable
 data class VersionsTomlLibrary(
     val module: String = "",
-    @TomlInline val version: TomlElement = TomlLiteral("0.0.0")
+    @TomlInline val version: TomlElement = TomlLiteral("0.0.0"),
 )
 
 @Serializable
 data class VersionsTomlPlugin(
     val id: String = "",
-    @TomlInline val version: TomlElement = TomlLiteral("0.0.0")
+    @TomlInline val version: TomlElement = TomlLiteral("0.0.0"),
 )
 
 fun versionsTomlVersionStrictly(version: String) = TomlTable(mapOf("strictly" to TomlLiteral(version)))
 fun versionsTomlVersionRef(refName: String) = TomlTable(mapOf("ref" to TomlLiteral(refName)))
 fun versionsTomlVersionDirect(version: String) = TomlLiteral(version)
-fun versionsTomlVersionStrictlyIfSnapshot(version: String) = if(version.contains("snapshot", true)) versionsTomlVersionStrictly(version) else versionsTomlVersionDirect(version)
+fun versionsTomlVersionStrictlyIfSnapshot(version: String) =
+    if (version.contains("snapshot", true)) versionsTomlVersionStrictly(version) else versionsTomlVersionDirect(version)
 
 fun VersionsToml.prettyTable(): TomlTable = buildTomlTable {
     table("versions") {
@@ -296,6 +301,29 @@ val permitCheckout = false
 @Deprecated("Remove minor, now set with gradle property 'versionMinor'")
 fun Project.lk(minor: Int, setup: LkGradleHelpers.() -> Unit = {}) = LkGradleHelpers(this).also(setup)
 class LkGradleHelpers(val project: Project) {
+    val offlineMode: Boolean = (
+            (project.findProperty("offlineModeOverride") as? String)
+                ?: (project.findProperty("offlineMode") as? String)
+            )
+        ?.takeUnless { it.isBlank() }
+        ?.let { it.lowercase() == "true" }
+        ?: false
+    val branchModeProjectsFolder: String? = if (!offlineMode) (
+            (project.findProperty("branchModeProjectsFolderOverride") as? String)
+                ?: (project.findProperty("branchModeProjectsFolder") as? String)
+            )
+        ?.takeUnless { it.isBlank() || it == "off" || it == "false" }
+        .also { if (it != null) println("Branch mode active ($it)") }
+    else null
+    val upgradeLockToLatest: Boolean = if(!offlineMode) (
+            (project.findProperty("upgradeLockToLatestOverride") as? String)
+                ?: (project.findProperty("upgradeLockToLatest") as? String)
+            )
+        ?.takeUnless { it.isBlank() || it == "off" || it == "false" }
+        ?.toBoolean()
+        .let { it ?: false }
+        .also { if (it) println("Upgrade lock to latest enabled") }
+    else false
     val branch = project.rootDir.getGitBranch()
     val versionMajor = branch.let {
         if (it.startsWith("version-")) it.removePrefix("version-").substringBefore('-').toIntOrNull() ?: 0
@@ -312,7 +340,12 @@ class LkGradleHelpers(val project: Project) {
             .split('\n')
         val myRunId = System.identityHashCode(project.gradle.startParameter).toString()
         if (myRunId == runId) return existingVersion
-        val result = project.rootDir.gitBasedVersion(versionMajor, versionMinor, canCreateTag = versionBranch == null)?.toString()
+        val result = project.rootDir.gitBasedVersion(
+            versionMajor,
+            versionMinor,
+            canCreateTag = versionBranch == null,
+            offlineMode = offlineMode
+        )?.toString()
             ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
         project.rootProject.extraProperties.set("gitBasedVersion", "$myRunId\n$result")
         return result
@@ -331,24 +364,10 @@ class LkGradleHelpers(val project: Project) {
             it.reader()
         )
     } ?: VersionsToml()
-    val branchModeProjectsFolder: String? = (
-            (project.findProperty("branchModeProjectsFolderOverride") as? String)
-                ?: (project.findProperty("branchModeProjectsFolder") as? String)
-            )
-        ?.takeUnless { it.isBlank() || it == "off" || it == "false" }
-        .also { if (it != null) println("Branch mode active ($it)") }
-    val upgradeLockToLatest: Boolean = (
-            (project.findProperty("upgradeLockToLatestOverride") as? String)
-                ?: (project.findProperty("upgradeLockToLatest") as? String)
-            )
-        ?.takeUnless { it.isBlank() || it == "off" || it == "false" }
-        ?.toBoolean()
-        .let { it ?: false }
-        .also { if (it) println("Upgrade lock to latest enabled") }
 
-    private fun requireProjectAndGetVersion(gitUrl: String, major: Int): String {
+    private fun requireProjectAndGetVersion(gitUrl: String, major: Int, projectFolder: File): String {
         val projectName = gitUrl.removeSuffix(".git").substringAfterLast('/')
-        val folder = File(branchModeProjectsFolder!!).resolve(projectName)
+        val folder = projectFolder.resolve(projectName)
         var needsBuild = !folder.resolve("local.version.txt").exists()
         if (!folder.exists()) {
             println("Cloning $gitUrl into $folder...")
@@ -386,8 +405,8 @@ class LkGradleHelpers(val project: Project) {
 
     fun mavenOrLocalPlugin(gitUrl: String, id: String, major: Int, minor: Int? = null): String {
         val camelCased = id.camelCase()
-        return branchModeProjectsFolder?.let(::File)?.let {
-            val version = requireProjectAndGetVersion(gitUrl, major)
+        return branchModeProjectsFolder?.let(::File)?.let { projectFolder ->
+            val version = requireProjectAndGetVersion(gitUrl, major, projectFolder)
             versioningToml.plugins[camelCased] =
                 VersionsTomlPlugin(id = id, version = versionsTomlVersionStrictlyIfSnapshot(version))
             "$id:$version"
@@ -406,10 +425,13 @@ class LkGradleHelpers(val project: Project) {
 
     fun mavenOrLocal(gitUrl: String, group: String, artifact: String, major: Int, minor: Int? = null): String {
         val camelCased = "$group $artifact".camelCase()
-        return branchModeProjectsFolder?.let(::File)?.let {
-            val version = requireProjectAndGetVersion(gitUrl, major)
+        return branchModeProjectsFolder?.let(::File)?.let { projectFolder ->
+            val version = requireProjectAndGetVersion(gitUrl, major, projectFolder)
             versioningToml.libraries[camelCased] =
-                VersionsTomlLibrary(module = "$group:$artifact", version = versionsTomlVersionStrictlyIfSnapshot(version))
+                VersionsTomlLibrary(
+                    module = "$group:$artifact",
+                    version = versionsTomlVersionStrictlyIfSnapshot(version)
+                )
             "$group:$artifact:$version"
         } ?: run {
             fun useLatest() = latestFromRemote(group, artifact, major, minor).also { version ->
