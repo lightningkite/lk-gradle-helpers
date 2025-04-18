@@ -167,7 +167,7 @@ internal fun File.gitLatestTag(major: Int, minor: Int): Version? {
 
 internal fun File.gitTagHash(tag: String): String = runCli("git", "rev-list", "-n", "1", tag).trim()
 internal fun File.gitBasedVersion(versionMajor: Int, versionMinor: Int, canCreateTag: Boolean = true): Version? {
-    runCli("git", "fetch", "--tags", "--force") // ensure we're up to date
+    if (canCreateTag) runCli("git", "fetch", "--tags", "--force") // ensure we're up to date
     val status = getGitStatus()
     if (!status.fullyPushed) {
         println("Not fully pushed, using snapshot version.  Raw status of Git: ${status.raw}")
@@ -312,7 +312,7 @@ class LkGradleHelpers(val project: Project) {
             .split('\n')
         val myRunId = System.identityHashCode(project.gradle.startParameter).toString()
         if (myRunId == runId) return existingVersion
-        val result = project.rootDir.gitBasedVersion(versionMajor, versionMinor, canCreateTag = versionBranch == null)?.toString()
+        val result = project.rootDir.gitBasedVersion(versionMajor, versionMinor, canCreateTag = versionBranch == null && branchModeProjectsFolder != null)?.toString()
             ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
         project.rootProject.extraProperties.set("gitBasedVersion", "$myRunId\n$result")
         return result
