@@ -21,54 +21,60 @@ fun Project.publishing() {
         maven("https://jitpack.io")
     }
 
-    project.publishing {
-        val version = gitBasedVersion()
-        project.version = version
-        repositories {
-            val lightningKiteMavenAwsAccessKey: String? =
-                project.findProperty("lightningKiteMavenAwsAccessKey") as? String
-            val lightningKiteMavenAwsSecretAccessKey: String? =
-                project.findProperty("lightningKiteMavenAwsSecretAccessKey") as? String
-            lightningKiteMavenAwsAccessKey?.let { ak ->
-                maven {
-                    name = "LightningKite"
-                    url = URI.create("s3://lightningkite-maven")
-                    credentials(AwsCredentials::class) {
-                        accessKey = ak
-                        secretKey = lightningKiteMavenAwsSecretAccessKey!!
+    afterEvaluate {
+        project.publishing {
+            repositories {
+                val lightningKiteMavenAwsAccessKey: String? =
+                    project.findProperty("lightningKiteMavenAwsAccessKey") as? String
+                val lightningKiteMavenAwsSecretAccessKey: String? =
+                    project.findProperty("lightningKiteMavenAwsSecretAccessKey") as? String
+                lightningKiteMavenAwsAccessKey?.let { ak ->
+                    maven {
+                        name = "LightningKite"
+                        url = URI.create("s3://lightningkite-maven")
+                        credentials(AwsCredentials::class) {
+                            accessKey = ak
+                            secretKey = lightningKiteMavenAwsSecretAccessKey!!
+                        }
                     }
                 }
             }
         }
-    }
-    val signingKey: String? = project.findProperty("signingKey") as? String
-    if (signingKey != null) {
-        project.signing {
-            isRequired = false
-            val signingPassword: String? = project.findProperty("signingPassword") as? String
-            if (signingKey != null) {
-                useInMemoryPgpKeys(signingKey, signingPassword)
+        val signingKey: String? = project.findProperty("signingKey") as? String
+        if (signingKey != null) {
+            println("Signing key found for ${project.name}")
+            project.signing {
+                println("Running signing config")
+                isRequired = false
+                val signingPassword: String? = project.findProperty("signingPassword") as? String
+                if (signingKey != null) {
+                    println("Signing password found; will sign")
+                    useInMemoryPgpKeys(signingKey, signingPassword)
+                } else {
+                    println("No signing password found.")
+                }
             }
+        } else {
+            project.afterEvaluate {
+                println("Signing key NOT found for ${project.name}")
+                project.tasks.withType<Sign>().configureEach {
+                    println("Disabling signing for ${this.name}")
+                    onlyIf("'signingKey' is present") { false }
+                }
+            }
+
         }
-    } else {
         project.afterEvaluate {
-            project.tasks.withType<Sign>().configureEach {
-                onlyIf("'signingKey' is present") { false }
+            project.tasks.findByName("publishToMavenLocal")?.doLast {
+                project.rootDir.resolve("local.version.txt").writeText(project.version.toString())
             }
         }
 
-    }
-    project.afterEvaluate {
-        project.tasks.findByName("publishToMavenLocal")?.doLast {
-            project.rootDir.resolve("local.version.txt").writeText(project.version.toString())
-        }
-    }
-
-    //Ensure cleanliness precommit hook
-    project.rootDir.resolve(".git/hooks/pre-commit").let {
-        if ((!it.exists() || it.readText().startsWith("#!/bin/bash")) && it.parentFile!!.exists()) {
-            it.writeText(
-                """
+        //Ensure cleanliness precommit hook
+        project.rootDir.resolve(".git/hooks/pre-commit").let {
+            if ((!it.exists() || it.readText().startsWith("#!/bin/bash")) && it.parentFile!!.exists()) {
+                it.writeText(
+                    """
                     #!/bin/sh
                     echo "Checking for 'snapshot' in versions..."
                     if grep SNAPSHOT gradle/libs.versions.toml; then
@@ -76,16 +82,17 @@ fun Project.publishing() {
                       exit 1
                     fi
                 """.trimIndent()
-            )
-            it.setExecutable(true)
+                )
+                it.setExecutable(true)
+            }
         }
-    }
 
-    // Ensure version file in git ignore
-    project.rootDir.resolve(".gitignore").let {
-        val withLs = System.lineSeparator() + "local.version.txt" + System.lineSeparator()
-        if (it.exists() && !it.readText().contains(withLs)) {
-            it.appendText(withLs)
+        // Ensure version file in git ignore
+        project.rootDir.resolve(".gitignore").let {
+            val withLs = System.lineSeparator() + "local.version.txt" + System.lineSeparator()
+            if (it.exists() && !it.readText().contains(withLs)) {
+                it.appendText(withLs)
+            }
         }
     }
 }
