@@ -108,6 +108,8 @@ fun Project.useLocalDependencies() {
         "com.lightningkite.lightningserver:server-dynamodb",
         "com.lightningkite.lightningserver:server-firebase",
         "com.lightningkite.lightningserver:server-ktor",
+        "com.lightningkite.lightningserver:server-mcp",
+        "com.lightningkite.lightningserver:server-media",
         "com.lightningkite.lightningserver:server-memcached",
         "com.lightningkite.lightningserver:server-mongo",
         "com.lightningkite.lightningserver:server-postgresql",
