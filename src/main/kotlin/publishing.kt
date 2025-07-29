@@ -10,7 +10,14 @@ import org.gradle.kotlin.dsl.maven
 import org.gradle.kotlin.dsl.repositories
 import org.gradle.kotlin.dsl.withType
 import org.gradle.plugins.signing.Sign
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import java.net.URI
+import kotlin.toString
+
+val Project.dokkaPublicHostingPath: String get() = group.toString().replace('.', '/') + "/" + name + "/" + version + "/docs"
+val Project.dokkaPublicHostingIndex: String get() = "https://lightningkite-maven.s3.amazonaws.com/$dokkaPublicHostingPath/index.html"
 
 fun Project.publishing() {
     project.repositories {
@@ -22,12 +29,12 @@ fun Project.publishing() {
     }
 
     afterEvaluate {
+        val lightningKiteMavenAwsAccessKey: String? =
+            project.findProperty("lightningKiteMavenAwsAccessKey") as? String
+        val lightningKiteMavenAwsSecretAccessKey: String? =
+            project.findProperty("lightningKiteMavenAwsSecretAccessKey") as? String
         project.publishing {
             repositories {
-                val lightningKiteMavenAwsAccessKey: String? =
-                    project.findProperty("lightningKiteMavenAwsAccessKey") as? String
-                val lightningKiteMavenAwsSecretAccessKey: String? =
-                    project.findProperty("lightningKiteMavenAwsSecretAccessKey") as? String
                 lightningKiteMavenAwsAccessKey?.let { ak ->
                     maven {
                         name = "LightningKite"
@@ -40,6 +47,31 @@ fun Project.publishing() {
                 }
             }
         }
+
+        lightningKiteMavenAwsAccessKey?.let { ak ->
+            project.tasks.findByName("dokkaHtml")?.let { dokkaHtml ->
+                val publishDokka = project.tasks.create("publishDokkaToS3") {
+                    group = "publishing"
+                    inputs.dir(dokkaHtml.outputs.files.singleFile)
+                    doFirst {
+                        dokkaHtml.outputs.files.singleFile.uploadDirectoryToS3(
+                            bucket = "lightningkite-maven",
+                            keyPrefix = project.dokkaPublicHostingPath,
+                            credentials = StaticCredentialsProvider.create(AwsBasicCredentials.create(ak, lightningKiteMavenAwsSecretAccessKey!!)),
+                        ).also {
+                            println("Published docs to $it")
+                        }
+                    }
+                }
+                project.tasks.getByName("publish").dependsOn(publishDokka)
+                dokkaHtml.enabled = version.toString().all { it.isDigit() || it == '.' } || localProperties?.getProperty("forceDokka") == "true"
+                project.tasks.create("publishPublic") {
+                    dependsOn(project.tasks.getByName("publishAllPublicationsToMavenCentralRepository"))
+                    dependsOn(project.tasks.getByName("publishDokkaToS3"))
+                }
+            }
+        }
+
         val signingKey: String? = project.findProperty("signingKey") as? String
         if (signingKey != null) {
             println("Signing key found for ${project.name}")

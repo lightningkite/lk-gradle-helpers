@@ -1,3 +1,4 @@
+import nmcp.CentralPortalOptions
 import java.net.URI
 import java.util.*
 
@@ -7,6 +8,8 @@ plugins {
     signing
     `maven-publish`
     kotlin("plugin.serialization") version "1.9.0"
+    id("org.jetbrains.dokka") version "2.0.0"
+    id("com.gradleup.nmcp.aggregation").version("1.0.2")
 }
 val kotlinVersion = "1.9.0"
 
@@ -31,11 +34,19 @@ dependencies {
     api(group = "org.jetbrains.kotlin", name = "kotlin-gradle-plugin", version = kotlinVersion)
     api(group = "org.jetbrains.kotlin", name = "kotlin-gradle-plugin-api", version = kotlinVersion)
     implementation("net.peanuuutz.tomlkt:tomlkt:0.3.7")
+    implementation("software.amazon.awssdk:s3:2.32.7")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test:$kotlinVersion")
 }
 
-version = "2.0.3"
+afterEvaluate {
+    project.tasks.findByName("dokkaHtml")?.let { dokkaHtml ->
+        val path = project.group.toString().replace('.', '/') + "/" + project.name + "/" + project.version + "/docs"
+        println("Would send dokka files from ${dokkaHtml.outputs.files.singleFile} to $path")
+    }
+}
+
+version = "3.0.0"
 
 publishing {
     repositories {

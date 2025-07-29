@@ -6,30 +6,70 @@ import java.time.OffsetDateTime
 import java.util.WeakHashMap
 
 val versionCache = WeakHashMap<Project, Pair<String, String>>()
-fun Project.useGitBasedVersion() { version = gitBasedVersion() }
+fun Project.useGitBasedVersion() {
+    if(!project.rootDir.resolve(".git").exists()) { return }
+    version = gitBasedVersion()
+}
+
 fun Project.gitBasedVersion(): String {
     val (runId, existingVersion) = versionCache[project.rootProject] ?: ("0" to "0.0.0")
     val myRunId = System.identityHashCode(project.gradle.startParameter).toString()
     if (myRunId == runId) return existingVersion
 
-    val branch = project.rootDir.getGitBranch()
-    val versionMajor = branch.let {
-        if (it.startsWith("version-")) it.removePrefix("version-").substringBefore('-').toIntOrNull() ?: 0
-        else 0
-    }
-    val versionBranch = branch.removePrefix("version-").substringAfter('-', "").takeUnless { it.isBlank() }
-    val versionMinor: Int = (project.findProperty("versionMinor") as? String)?.toIntOrNull() ?: 0
-
-    val result = project.rootDir.gitBasedVersion(
-        versionMajor,
-        versionMinor,
-        canCreateTag = versionBranch == null,
-        offlineMode = offlineMode
-    )?.toString()
-        ?: project.rootDir.getGitBranch().plus("-SNAPSHOT")
-    println("Determined version of ${project.rootProject.name} to be $result")
+    val result = project.rootDir.gitBasedVersionUncached().toString()
     versionCache[project.rootProject] = myRunId to result
     return result
+}
+internal val isCi: Boolean get() =
+    System.getenv("GITHUB_ACTIONS") == "true" ||
+    System.getenv("TRAVIS") == "true" ||
+    System.getenv("CIRCLECI") == "true" ||
+    System.getenv("GITLAB_CI") == "true"
+internal fun File.gitBasedVersionUncached(): Version {
+    val branch = this.getGitBranch()
+    val isClean = this.getGitStatus().workingTreeClean || isCi
+    val describedByTag = this.getGitClosestTag()!!
+    return gitBasedVersionLogic(branch, describedByTag, isClean)
+}
+
+internal fun gitBasedVersionLogic(
+    branch: String,
+    describedByTag: Version,
+    isClean: Boolean
+): Version {
+    val isStandardBranchName = when(branch) {
+        "dev", "development", "main", "master" -> true
+        else -> branch.removePrefix("version").removePrefix("-").all { it.isDigit() || it == '.' }
+    }
+    val intendedVersionByBranchName = run {
+        val cutOff = branch.removePrefix("version").removePrefix("v").removePrefix("-")
+        if (cutOff.all { it.isDigit() || it == '.' || it == '-' }) {
+            Version.fromString(cutOff.replace('-', '.'))
+        } else null
+    }
+    val major = intendedVersionByBranchName?.major ?: describedByTag.major
+    val minor = intendedVersionByBranchName?.minor?.takeIf { describedByTag.major != intendedVersionByBranchName.major } ?: describedByTag.minor
+    val patch = intendedVersionByBranchName?.patch?.takeIf { describedByTag.major != intendedVersionByBranchName.major || describedByTag.minor != intendedVersionByBranchName.minor } ?: describedByTag.patch
+    val isPreReleaseFromBranch = major > describedByTag.major || (major == describedByTag.major && minor > describedByTag.minor) || (major == describedByTag.major && minor == describedByTag.minor && patch > describedByTag.patch)
+
+    return Version(
+        major = major,
+        minor = minor,
+        patch = if(isPreReleaseFromBranch || (isClean && describedByTag.prerelease == null)) patch else patch + 1,
+        prerelease = StringBuilder().apply {
+            if (!isStandardBranchName) {
+                append(branch.filter { it.isLetterOrDigit() })
+                append('-')
+            } else if(isPreReleaseFromBranch) {
+                append("prerelease-")
+            }
+            describedByTag.prerelease?.let { append(it) }
+            if (!isClean) {
+                append("-local")
+            }
+        }.toString().takeUnless { it.isBlank() },
+        buildMetadata = describedByTag.buildMetadata
+    )
 }
 
 internal fun File.runCli(vararg args: String): String {
@@ -46,6 +86,7 @@ internal fun File.runCli(vararg args: String): String {
     }
     return result
 }
+
 internal fun File.runCliWithOutput(vararg args: String) {
     assert(this.exists())
     val process = ProcessBuilder(*args)
@@ -64,6 +105,11 @@ internal fun File.getGitCommitTime(): OffsetDateTime =
 internal fun File.getGitBranch(): String = runCli("git", "rev-parse", "--abbrev-ref", "HEAD").trim()
 internal fun File.getGitTag(): Version? = try {
     runCli("git", "describe", "--exact-match", "--tags").trim().let(Version::fromString)
+} catch (e: Exception) {
+    null
+}
+internal fun File.getGitClosestTag(): Version? = try {
+    runCli("git", "describe", "--tags").trim().substringBeforeLast('-').let(Version::fromString)
 } catch (e: Exception) {
     null
 }
@@ -105,22 +151,53 @@ internal fun File.getGitStatus(): GitStatus = runCli("git", "status").let {
     )
 }
 
-data class Version(val major: Int, val minor: Int, val patch: Int, val postdash: String? = null) : Comparable<Version> {
+data class Version(
+    val major: Int,
+    val minor: Int,
+    val patch: Int,
+    val prerelease: String? = null,
+    val buildMetadata: String? = null
+) : Comparable<Version> {
+    constructor(
+        major: Int,
+        minor: Int,
+        patch: Int,
+        prereleaseName: String? = null,
+        prereleaseBuildNumber: Int? = null,
+        buildMetadata: String? = null,
+    ):this(
+        major = major,
+        minor = minor,
+        patch = patch,
+        prerelease = listOfNotNull(
+            prereleaseName,
+            prereleaseBuildNumber?.toString()?.padStart(4, '0')
+        ).joinToString("-"),
+        buildMetadata = buildMetadata?.takeUnless { it.isBlank() }
+    )
     override fun compareTo(other: Version): Int = comparator.compare(this, other)
 
     companion object {
         private val comparator = compareBy(Version::major, Version::minor, Version::patch)
         fun fromString(string: String): Version {
-            val parts = string.substringBefore('-').split(".")
-            val major = parts.getOrNull(0)?.toIntOrNull() ?: -1
-            val minor = parts.getOrNull(1)?.toIntOrNull() ?: -1
-            val patch = parts.getOrNull(2)?.toIntOrNull() ?: -1
-            return Version(major, minor, patch, string.substringAfter('-', "").takeUnless { it.isBlank() })
+            val parts = string.substringBefore('-').substringBefore('+').split(".")
+            val major = parts.getOrNull(0)?.toIntOrNull() ?: 0
+            val minor = parts.getOrNull(1)?.toIntOrNull() ?: 0
+            val patch = parts.getOrNull(2)?.toIntOrNull() ?: 0
+            val postDash = string.substringAfter('-', "").substringBefore('+').takeUnless { it.isBlank() }
+            val buildMetadata = string.substringAfter('+', "").substringBefore('-').takeUnless { it.isBlank() }
+            return Version(major, minor, patch, postDash, buildMetadata)
         }
     }
 
-    override fun toString(): String = "$major.$minor.$patch" + (postdash?.let { "-$it" } ?: "")
+    override fun toString(): String =
+        "$major.$minor.$patch" + (prerelease?.let { "-$it" } ?: "") + (buildMetadata?.let { "+$it" } ?: "")
+
     fun incrementPatch() = copy(patch = patch + 1)
+
+    val prereleaseBuildNumber: Int get() = prerelease?.filter { it.isDigit() }?.toIntOrNull() ?: -1
+    val prereleaseName: String? get() = prerelease?.filter { it.isLetter() }?.takeUnless { it.isBlank() }
+    fun incrementPrereleaseBuildNumber() = copy(buildMetadata = buildMetadata)
 }
 
 internal fun File.gitLatestTag(major: Int, minor: Int): Version? {
@@ -133,27 +210,3 @@ internal fun File.gitLatestTag(major: Int, minor: Int): Version? {
 }
 
 internal fun File.gitTagHash(tag: String): String = runCli("git", "rev-list", "-n", "1", tag).trim()
-internal fun File.gitBasedVersion(versionMajor: Int, versionMinor: Int, canCreateTag: Boolean = true, offlineMode: Boolean): Version? {
-    val status = getGitStatus()
-    if (!status.fullyPushed) {
-        println("Not fully pushed, using snapshot version.  Raw status of Git: ${status.raw}")
-        return null
-    }
-    var current = getGitTag()
-    if (current == null && !offlineMode) {
-        runCli("git", "fetch", "--tags", "--force") // ensure we're up to date
-        current = getGitTag()
-    }
-    return if (current != null) {
-        // OK, we've already made the tag!
-        println("Tag $current is up to date.")
-        current
-    } else if (canCreateTag && !offlineMode) {
-        val latest = gitLatestTag(versionMajor, versionMinor)
-        val newTag = (latest ?: Version(versionMajor, versionMinor, -1)).incrementPatch()
-        runCli("git", "tag", newTag.toString())
-        runCli("git", "push", "origin", "tag", newTag.toString())
-        println("New tag $newTag created.")
-        newTag
-    } else null
-}
