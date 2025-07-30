@@ -7,7 +7,9 @@ import java.util.WeakHashMap
 
 val versionCache = WeakHashMap<Project, Pair<String, String>>()
 fun Project.useGitBasedVersion() {
-    if(!project.rootDir.resolve(".git").exists()) { return }
+    if (!project.rootDir.resolve(".git").exists()) {
+        return
+    }
     version = gitBasedVersion()
 }
 
@@ -21,15 +23,19 @@ fun Project.gitBasedVersion(): String {
     versionCache[project.rootProject] = myRunId to result
     return result
 }
-internal val isCi: Boolean get() =
-    System.getenv("GITHUB_ACTIONS") == "true" ||
-    System.getenv("TRAVIS") == "true" ||
-    System.getenv("CIRCLECI") == "true" ||
-    System.getenv("GITLAB_CI") == "true"
+
+internal val isCi: Boolean
+    get() =
+        System.getenv("GITHUB_ACTIONS") == "true" ||
+                System.getenv("TRAVIS") == "true" ||
+                System.getenv("CIRCLECI") == "true" ||
+                System.getenv("GITLAB_CI") == "true"
+
 internal fun File.gitBasedVersionUncached(): Version {
     val branch = this.getGitBranch()
     val isClean = this.getGitStatus().workingTreeClean || isCi
     val describedByTag = this.getGitClosestTag()
+    println("describedByTag: $describedByTag")
     return gitBasedVersionLogic(branch, describedByTag, isClean)
 }
 
@@ -38,7 +44,7 @@ internal fun gitBasedVersionLogic(
     describedByTag: Version,
     isClean: Boolean
 ): Version {
-    val isStandardBranchName = when(branch.lowercase()) {
+    val isStandardBranchName = when (branch.lowercase()) {
         "dev", "development", "main", "master", "head" -> true
         else -> branch.removePrefix("version").removePrefix("-").all { it.isDigit() || it == '.' }
     }
@@ -48,27 +54,22 @@ internal fun gitBasedVersionLogic(
             Version.fromString(cutOff.replace('-', '.'))
         } else null
     }
-    val major = intendedVersionByBranchName?.major ?: describedByTag.major
-    val minor = intendedVersionByBranchName?.minor?.takeIf { describedByTag.major != intendedVersionByBranchName.major } ?: describedByTag.minor
-    val patch = intendedVersionByBranchName?.patch?.takeIf { describedByTag.major != intendedVersionByBranchName.major || describedByTag.minor != intendedVersionByBranchName.minor } ?: describedByTag.patch
-    val isPreReleaseFromBranch = major > describedByTag.major || (major == describedByTag.major && minor > describedByTag.minor) || (major == describedByTag.major && minor == describedByTag.minor && patch > describedByTag.patch)
+    val isPreReleaseFromBranch = intendedVersionByBranchName != null && intendedVersionByBranchName > describedByTag
 
     return Version(
-        major = major,
-        minor = minor,
-        patch = if(isPreReleaseFromBranch || (isClean && describedByTag.prerelease == null)) patch else patch + 1,
-        prerelease = StringBuilder().apply {
-            if (!isStandardBranchName) {
-                append(branch.filter { it.isLetterOrDigit() })
-                append('-')
-            } else if(isPreReleaseFromBranch) {
-                append("prerelease-")
-            }
-            describedByTag.prerelease?.let { append(it) }
-            if (!isClean) {
-                append("-local")
-            }
-        }.toString().takeUnless { it.isBlank() },
+        major = if(isPreReleaseFromBranch) intendedVersionByBranchName!!.major else describedByTag.major,
+        minor = if(isPreReleaseFromBranch) intendedVersionByBranchName!!.minor else describedByTag.minor,
+        patch = if (isPreReleaseFromBranch) intendedVersionByBranchName!!.patch else describedByTag.patch.let {
+            if(isClean && describedByTag.prerelease == null) it
+            else it + 1
+        },
+        prerelease = listOfNotNull(
+            if(!isStandardBranchName) branch.filter { it.isLetterOrDigit() }
+            else if (isPreReleaseFromBranch) "prerelease"
+            else null,
+            describedByTag.prerelease,
+            if(!isClean) "local" else null
+        ).joinToString("-").takeUnless { it.isBlank() },
         buildMetadata = describedByTag.buildMetadata
     )
 }
@@ -109,7 +110,9 @@ internal fun File.getGitTag(): Version? = try {
 } catch (e: Exception) {
     null
 }
-internal fun File.getGitClosestTag(): Version = runCli("git", "describe", "--tags").trim().substringBeforeLast('-').let(Version::fromString)
+
+internal fun File.getGitClosestTag(): Version =
+    runCli("git", "describe", "--tags").trim().substringBeforeLast('-').let(Version::fromString)
 
 internal fun File.getGitHash(): String = runCli("git", "rev-parse", "HEAD").trim()
 internal data class GitStatus(
@@ -162,7 +165,7 @@ data class Version(
         prereleaseName: String? = null,
         prereleaseBuildNumber: Int? = null,
         buildMetadata: String? = null,
-    ):this(
+    ) : this(
         major = major,
         minor = minor,
         patch = patch,
@@ -172,6 +175,7 @@ data class Version(
         ).joinToString("-"),
         buildMetadata = buildMetadata?.takeUnless { it.isBlank() }
     )
+
     override fun compareTo(other: Version): Int = comparator.compare(this, other)
 
     companion object {

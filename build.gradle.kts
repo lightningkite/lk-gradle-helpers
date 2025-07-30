@@ -49,7 +49,7 @@ afterEvaluate {
     }
 }
 
-version = "4.0.2"
+version = "4.0.3"
 
 publishing {
     repositories {
