@@ -17,6 +17,7 @@ fun Project.gitBasedVersion(): String {
     if (myRunId == runId) return existingVersion
 
     val result = project.rootDir.gitBasedVersionUncached().toString()
+    println("Project version: $result")
     versionCache[project.rootProject] = myRunId to result
     return result
 }

@@ -79,7 +79,7 @@ fun Project.dokkaUploadTask(accessKey: String, secret: String) {
 
 fun Project.setupDokka(group: String = "lightningkite", repo: String) {
     dependencies {
-        add("dokkaPlugin", "com.lightningkite:dokka-plugin-hide-optin:0.0.1--local")
+        add("dokkaPlugin", "com.lightningkite:dokka-plugin-hide-optin:0.0.4")
     }
     configure<DokkaExtension> {
         dokkaSourceSets.configureEach {

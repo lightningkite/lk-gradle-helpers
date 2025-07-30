@@ -79,6 +79,10 @@ fun Project.useLocalDependencies() {
         "com.lightningkite:readable",
     )
     local(
+        "git@github.com:lightningkite/reactive.git",
+        "com.lightningkite:reactive",
+    )
+    local(
         "git@github.com:lightningkite/kiteui.git",
         "com.lightningkite.kiteui:library",
         "com.lightningkite.kiteui"

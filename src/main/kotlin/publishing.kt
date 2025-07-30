@@ -90,7 +90,11 @@ fun Project.lkPublishing(githubOrg: String, githubRepo: String, pom: MavenPom.()
                 it.writeText(
                     """
                     #!/bin/sh
-                    echo "Checking for 'snapshot' in versions..."
+                    echo "Checking for 'snapshot' or 'local' in versions..."
+                    if grep local gradle/libs.versions.toml; then
+                      echo "There's a 'local' version in your libs.versions.toml!  You need to have clean versions before you commit."
+                      exit 1
+                    fi
                     if grep SNAPSHOT gradle/libs.versions.toml; then
                       echo "There's a 'snapshot' version in your libs.versions.toml!  You need to have clean versions before you commit."
                       exit 1
