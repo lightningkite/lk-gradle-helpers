@@ -35,6 +35,8 @@ dependencies {
     api(group = "org.jetbrains.kotlin", name = "kotlin-gradle-plugin-api", version = kotlinVersion)
     implementation("net.peanuuutz.tomlkt:tomlkt:0.3.7")
     implementation("software.amazon.awssdk:s3:2.32.7")
+    implementation("org.jetbrains.dokka:org.jetbrains.dokka.gradle.plugin:2.0.0")
+    implementation("org.jetbrains:markdown:0.7.3")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test:$kotlinVersion")
 }
@@ -46,7 +48,7 @@ afterEvaluate {
     }
 }
 
-version = "3.0.0"
+version = "3.0.8"
 
 publishing {
     repositories {

@@ -28,7 +28,7 @@ internal val isCi: Boolean get() =
 internal fun File.gitBasedVersionUncached(): Version {
     val branch = this.getGitBranch()
     val isClean = this.getGitStatus().workingTreeClean || isCi
-    val describedByTag = this.getGitClosestTag()!!
+    val describedByTag = this.getGitClosestTag()
     return gitBasedVersionLogic(branch, describedByTag, isClean)
 }
 
@@ -37,8 +37,8 @@ internal fun gitBasedVersionLogic(
     describedByTag: Version,
     isClean: Boolean
 ): Version {
-    val isStandardBranchName = when(branch) {
-        "dev", "development", "main", "master" -> true
+    val isStandardBranchName = when(branch.lowercase()) {
+        "dev", "development", "main", "master", "head" -> true
         else -> branch.removePrefix("version").removePrefix("-").all { it.isDigit() || it == '.' }
     }
     val intendedVersionByBranchName = run {
@@ -108,11 +108,7 @@ internal fun File.getGitTag(): Version? = try {
 } catch (e: Exception) {
     null
 }
-internal fun File.getGitClosestTag(): Version? = try {
-    runCli("git", "describe", "--tags").trim().substringBeforeLast('-').let(Version::fromString)
-} catch (e: Exception) {
-    null
-}
+internal fun File.getGitClosestTag(): Version = runCli("git", "describe", "--tags").trim().substringBeforeLast('-').let(Version::fromString)
 
 internal fun File.getGitHash(): String = runCli("git", "rev-parse", "HEAD").trim()
 internal data class GitStatus(

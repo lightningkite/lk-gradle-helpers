@@ -16,9 +16,6 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import java.net.URI
 import kotlin.toString
 
-val Project.dokkaPublicHostingPath: String get() = group.toString().replace('.', '/') + "/" + name + "/" + version + "/docs"
-val Project.dokkaPublicHostingIndex: String get() = "https://lightningkite-maven.s3.amazonaws.com/$dokkaPublicHostingPath/index.html"
-
 fun Project.publishing() {
     project.repositories {
         mavenLocal()
@@ -49,27 +46,7 @@ fun Project.publishing() {
         }
 
         lightningKiteMavenAwsAccessKey?.let { ak ->
-            project.tasks.findByName("dokkaHtml")?.let { dokkaHtml ->
-                val publishDokka = project.tasks.create("publishDokkaToS3") {
-                    group = "publishing"
-                    inputs.dir(dokkaHtml.outputs.files.singleFile)
-                    doFirst {
-                        dokkaHtml.outputs.files.singleFile.uploadDirectoryToS3(
-                            bucket = "lightningkite-maven",
-                            keyPrefix = project.dokkaPublicHostingPath,
-                            credentials = StaticCredentialsProvider.create(AwsBasicCredentials.create(ak, lightningKiteMavenAwsSecretAccessKey!!)),
-                        ).also {
-                            println("Published docs to $it")
-                        }
-                    }
-                }
-                project.tasks.getByName("publish").dependsOn(publishDokka)
-                dokkaHtml.enabled = version.toString().all { it.isDigit() || it == '.' } || localProperties?.getProperty("forceDokka") == "true"
-                project.tasks.create("publishPublic") {
-                    dependsOn(project.tasks.getByName("publishAllPublicationsToMavenCentralRepository"))
-                    dependsOn(project.tasks.getByName("publishDokkaToS3"))
-                }
-            }
+            dokkaUploadTask(ak, lightningKiteMavenAwsSecretAccessKey!!)
         }
 
         val signingKey: String? = project.findProperty("signingKey") as? String

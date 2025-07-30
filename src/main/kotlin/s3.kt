@@ -3,6 +3,7 @@ package com.lightningkite.deployhelpers
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider
 import software.amazon.awssdk.core.async.AsyncRequestBody
+import software.amazon.awssdk.core.internal.async.ByteBuffersAsyncRequestBody
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3AsyncClient
@@ -58,6 +59,44 @@ fun File.uploadDirectoryToS3(
         }.toList().forEach {
             it.get()
         }
+    } finally {
+        // Close the S3 client to release resources
+        s3Client.close()
+    }
+    return "https://$bucket.s3.amazonaws.com/$keyPrefix"
+}
+
+/**
+ * Uploads a directory and all its contents to an S3 bucket.
+ *
+ * @param bucket The name of the S3 bucket to upload to
+ * @param keyPrefix The prefix to use for the S3 keys (can include path separators)
+ * @return The S3 URL of the folder's contents.  You probably want to append an 'index.html' for access later.
+ */
+fun uploadFilesToS3(
+    bucket: String,
+    keyPrefix: String,
+    keys: Map<String, String>,
+    region: Region = Region.US_WEST_2,
+    credentials: AwsCredentialsProvider = DefaultCredentialsProvider.builder().profileName("lk").build()
+): String {
+
+    // Create S3 client with default credentials provider
+    val s3Client = S3AsyncClient.builder()
+        .region(region) // Default region, can be made configurable if needed
+        .credentialsProvider(credentials)
+        .build()
+    try {
+        keys.entries.map { (key, content) ->
+            // Create the put request
+            val putRequest = PutObjectRequest.builder()
+                .bucket(bucket)
+                .key("$keyPrefix/$key".trim('/'))
+                .build()
+
+            // Upload the file
+            s3Client.putObject(putRequest, ByteBuffersAsyncRequestBody.from("text/html", content.toByteArray()))
+        }.forEach { it.get() }
     } finally {
         // Close the S3 client to release resources
         s3Client.close()
