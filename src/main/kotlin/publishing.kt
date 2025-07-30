@@ -1,10 +1,14 @@
 package com.lightningkite.deployhelpers
 
+import com.vanniktech.maven.publish.KotlinMultiplatform
+import com.vanniktech.maven.publish.MavenPublishBaseExtension
 import net.peanuuutz.tomlkt.Toml
 import net.peanuuutz.tomlkt.TomlTable
 import net.peanuuutz.tomlkt.encodeToNativeWriter
 import org.gradle.api.Project
 import org.gradle.api.credentials.AwsCredentials
+import org.gradle.api.publish.maven.MavenPom
+import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.credentials
 import org.gradle.kotlin.dsl.maven
 import org.gradle.kotlin.dsl.repositories
@@ -14,9 +18,10 @@ import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import java.net.URI
+import kotlin.text.set
 import kotlin.toString
 
-fun Project.publishing() {
+fun Project.lkPublishing(githubOrg: String, githubRepo: String, pom: MavenPom.()->Unit) {
     project.repositories {
         mavenLocal()
         maven("https://lightningkite-maven.s3.us-west-2.amazonaws.com")
@@ -103,5 +108,26 @@ fun Project.publishing() {
                 it.appendText(withLs)
             }
         }
+    }
+    configure<MavenPublishBaseExtension> {
+        publishToMavenCentral(automaticRelease = true)
+        signAllPublications()
+        coordinates(group.toString(), name, version.toString())
+        configureBasedOnAppliedPlugins(
+            sourcesJar = true,
+            javadocJar = version.toString().all { it.isDigit() || it == '.' } || localProperties?.getProperty("forceDokka") == "true"
+        )
+        pom(configure = {
+            name.set(this@lkPublishing.name)
+            github(githubOrg, githubRepo)
+            url.set(dokkaPublicHostingIndex)
+            pom()
+            licenses { apache() }
+            developers {
+                joseph()
+                brady()
+                hunter()
+            }
+        })
     }
 }

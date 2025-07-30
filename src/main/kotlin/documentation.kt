@@ -11,8 +11,10 @@ import org.jetbrains.dokka.gradle.DokkaExtension
 import org.jetbrains.dokka.gradle.DokkaTask
 import org.jetbrains.dokka.gradle.engine.plugins.DokkaPluginParametersBaseSpec
 import org.jetbrains.dokka.gradle.internal.InternalDokkaGradlePluginApi
+import org.jetbrains.dokka.gradle.tasks.DokkaGeneratePublicationTask
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
+import java.net.URI
 import java.net.URL
 import javax.inject.Inject
 
@@ -79,30 +81,27 @@ fun Project.setupDokka(group: String = "lightningkite", repo: String) {
     dependencies {
         add("dokkaPlugin", "com.lightningkite:dokka-plugin-hide-optin:0.0.1--local")
     }
-    tasks.withType<DokkaTask>().configureEach {
-        enabled = version.toString().also { println("Checking version $it for dokka enablement") }.all { it.isDigit() || it == '.' } || localProperties?.getProperty("forceDokka") == "true"
-        dokkaSourceSets {
-            configureEach {
-                // used as project name in the header
+    configure<DokkaExtension> {
+        dokkaSourceSets.configureEach {
+            // used as project name in the header
 //                moduleName.set("Dokka Gradle Example")
 
-                // contains descriptions for the module and the packages
-                (
-                        this.sourceRoots
-                            .mapNotNull { it.resolve("module.md") }
-                            .firstOrNull { it.exists() }
-                        )
-                    ?.let {
-                        includes.from(it)
-                    }
-
-                // adds source links that lead to this repository, allowing readers
-                // to easily find source code for inspected declarations
-                sourceLink {
-                    localDirectory.set(file("src/${name}/kotlin"))
-                    remoteUrl.set(URL("https://github.com/$group/$repo/tree/master/"))
-                    remoteLineSuffix.set("#L")
+            // contains descriptions for the module and the packages
+            (
+                    this.sourceRoots
+                        .mapNotNull { it.resolve("module.md") }
+                        .firstOrNull { it.exists() }
+                    )
+                ?.let {
+                    includes.from(it)
                 }
+
+            // adds source links that lead to this repository, allowing readers
+            // to easily find source code for inspected declarations
+            sourceLink {
+                localDirectory.set(file("src/${name}/kotlin"))
+                remoteUrl.set(URI("https://github.com/$group/$repo/tree/master/"))
+                remoteLineSuffix.set("#L")
             }
         }
     }

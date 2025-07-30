@@ -22,6 +22,15 @@ fun MavenPomLicenseSpec.mit() {
     }
 }
 
+fun MavenPomLicenseSpec.apache() {
+    license {
+        name.set("Apache-2.0")
+        url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+        distribution.set("repo")
+        comments.set("A business-friendly OSS license")
+    }
+}
+
 fun MavenPomDeveloperSpec.joseph() {
     developer {
         id.set("LightningKiteJoseph")
@@ -37,3 +46,17 @@ fun MavenPomDeveloperSpec.brady() {
         email.set("brady@lightningkite.com")
     }
 }
+fun MavenPomDeveloperSpec.hunter() {
+    developer {
+        id.set("iHoonter")
+        name.set("Hunter")
+        email.set("Hunter@lightningkite.com")
+    }
+}
+//fun MavenPomDeveloperSpec.albin() {
+//    developer {
+//        id.set("bjsvedin")
+//        name.set("Albin")
+//        email.set("brady@lightningkite.com")
+//    }
+//}

@@ -37,6 +37,7 @@ dependencies {
     implementation("software.amazon.awssdk:s3:2.32.7")
     implementation("org.jetbrains.dokka:org.jetbrains.dokka.gradle.plugin:2.0.0")
     implementation("org.jetbrains:markdown:0.7.3")
+    implementation("com.vanniktech.maven.publish:com.vanniktech.maven.publish.gradle.plugin:0.34.0")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test:$kotlinVersion")
 }
@@ -48,7 +49,7 @@ afterEvaluate {
     }
 }
 
-version = "3.0.8"
+version = "4.0.0"
 
 publishing {
     repositories {
