@@ -24,20 +24,24 @@ fun Project.useLocalDependencies() {
         )
     } ?: VersionsToml()
     val actuallyUseLocal = project.localProperties?.getProperty("useLocalDependencies", "false")?.toBoolean() ?: false
-    fun local(gitUrl: String, vararg proposedArtifacts: String) {
-        val matchingArtifacts = proposedArtifacts
-            .mapNotNull {
-                val matches = versioningToml.libraries.entries.find { e -> e.value.module == it }?.key
-                    ?: versioningToml.plugins.entries.find { e -> e.value.id == it }?.key
-                    ?: return@mapNotNull null
-                matches to it
-            }
-            .associate { it }
-        if(matchingArtifacts.isEmpty()) return
+    fun local(gitUrl: String, match: (String)->Boolean) {
+        val matchingKeys = listOf(
+            versioningToml.libraries.entries.filter { match(it.value.module) }.map { it.key },
+            versioningToml.plugins.entries.filter { match(it.value.id) }.map { it.key }
+        ).flatten().toSet()
+//        val matchingArtifacts = proposedArtifacts
+//            .mapNotNull {
+//                val matches = versioningToml.libraries.entries.find { e -> e.value.module == it }?.key
+//                    ?: versioningToml.plugins.entries.find { e -> e.value.id == it }?.key
+//                    ?: return@mapNotNull null
+//                matches to it
+//            }
+//            .associate { it }
+        if(matchingKeys.isEmpty()) return
         if (!actuallyUseLocal) return
         val projectName = gitUrl.removeSuffix(".git").substringAfterLast('/')
         val camelCased = projectName.camelCase()
-        println("Updating versions for ${matchingArtifacts.keys}")
+        println("Updating versions for ${matchingKeys}")
         val folder = projectsLocation.resolve(projectName)
 
         if (!folder.exists()) {
@@ -60,17 +64,19 @@ fun Project.useLocalDependencies() {
             }
 
         versioningToml.versions[camelCased] = versionsTomlVersionStrictlyIfSnapshot(version)
-        for ((name, artifact) in matchingArtifacts) {
-            if(artifact.contains(':')) {
-                // normal dependency
-                versioningToml.libraries[name] =
-                    VersionsTomlLibrary(artifact, versionsTomlVersionRef(camelCased))
-            } else {
-                // plugin
-                versioningToml.plugins[name] =
-                    VersionsTomlPlugin(artifact, versionsTomlVersionRef(camelCased))
+        for (key in matchingKeys) {
+            versioningToml.libraries[key]?.let { it ->
+                versioningToml.libraries[key] = it.copy(version = versionsTomlVersionRef(camelCased))
+            } ?: versioningToml.plugins[key]?.let { it ->
+                versioningToml.plugins[key] = it.copy(version = versionsTomlVersionRef(camelCased))
             }
         }
+    }
+    fun local(gitUrl: String, startsWith: String) {
+        local(gitUrl) { it.startsWith(startsWith) }
+    }
+    fun local(gitUrl: String, artifacts: Collection<String>) {
+        local(gitUrl) { it in artifacts }
     }
 
     // Insert known LK artifacts here
@@ -84,7 +90,6 @@ fun Project.useLocalDependencies() {
     )
     local(
         "git@github.com:lightningkite/kiteui.git",
-        "com.lightningkite.kiteui:library",
         "com.lightningkite.kiteui"
     )
     local(
@@ -99,34 +104,21 @@ fun Project.useLocalDependencies() {
         "git@github.com:lightningkite/kotlinx-serialization-csv-durable.git",
         "com.lightningkite:kotlinx-serialization-csv-durable",
     )
+    local(
+        "git@github.com:lightningkite/service-abstractions.git",
+        "com.lightningkite.services",
+    )
 
     local(
         "git@github.com:lightningkite/lightning-server.git",
-        "com.lightningkite.lightningserver:processor",
-        "com.lightningkite.lightningserver:shared",
-        "com.lightningkite.lightningserver:server-aws",
-        "com.lightningkite.lightningserver:server-azure",
-        "com.lightningkite.lightningserver:server-clamav",
-        "com.lightningkite.lightningserver:server-core",
-        "com.lightningkite.lightningserver:server-testing",
-        "com.lightningkite.lightningserver:server-dynamodb",
-        "com.lightningkite.lightningserver:server-firebase",
-        "com.lightningkite.lightningserver:server-ktor",
-        "com.lightningkite.lightningserver:server-mcp",
-        "com.lightningkite.lightningserver:server-media",
-        "com.lightningkite.lightningserver:server-memcached",
-        "com.lightningkite.lightningserver:server-mongo",
-        "com.lightningkite.lightningserver:server-postgresql",
-        "com.lightningkite.lightningserver:server-redis",
-        "com.lightningkite.lightningserver:server-scim",
-        "com.lightningkite.lightningserver:server-sentry",
-        "com.lightningkite.lightningserver:server-sentry9",
-        "com.lightningkite.lightningserver:server-sftp",
-    )
+    ) {
+        it.startsWith("com.lightningkite.lightningserver") && !it.startsWith("com.lightningkite.lightningserver:client")
+    }
     local(
         "git@github.com:lightningkite/kotlin-test-manual.git",
-        "com.lightningkite.testing.manual",
+        listOf("com.lightningkite.testing.manual",
         "com.lightningkite.testing:kotlin-test-manual-runtime",
+        )
     )
 
     if (versioningToml != versioningTomlStart) {
