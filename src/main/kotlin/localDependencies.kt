@@ -24,7 +24,27 @@ fun Project.useLocalDependencies() {
         )
     } ?: VersionsToml()
     val actuallyUseLocal = project.localProperties?.getProperty("useLocalDependencies", "false")?.toBoolean() ?: false
-    fun local(gitUrl: String, match: (String)->Boolean) {
+    upgradeVersions(versioningToml, actuallyUseLocal, projectsLocation)
+
+    if (versioningToml != versioningTomlStart) {
+        println("Updating versions toml...")
+        Toml.encodeToNativeWriter(
+            TomlTable.serializer(),
+            versioningToml.prettyTable(),
+            versioningTomlFile.writer()
+        )
+        println("Done.")
+    } else {
+        println("Versions are up to date.")
+    }
+}
+
+internal fun upgradeVersions(
+    versioningToml: VersionsToml,
+    actuallyUseLocal: Boolean,
+    projectsLocation: File
+) {
+    fun local(gitUrl: String, match: (String) -> Boolean) {
         val matchingKeys = listOf(
             versioningToml.libraries.entries.filter { match(it.value.module) }.map { it.key },
             versioningToml.plugins.entries.filter { match(it.value.id) }.map { it.key }
@@ -37,11 +57,10 @@ fun Project.useLocalDependencies() {
 //                matches to it
 //            }
 //            .associate { it }
-        if(matchingKeys.isEmpty()) return
+        if (matchingKeys.isEmpty()) return
         if (!actuallyUseLocal) return
         val projectName = gitUrl.removeSuffix(".git").substringAfterLast('/')
         val camelCased = projectName.camelCase()
-        println("Updating versions for ${matchingKeys}")
         val folder = projectsLocation.resolve(projectName)
 
         if (!folder.exists()) {
@@ -63,6 +82,7 @@ fun Project.useLocalDependencies() {
                 )
             }
 
+        println("Updating versions for ${matchingKeys} to ${version}")
         versioningToml.versions[camelCased] = versionsTomlVersionStrictlyIfSnapshot(version)
         for (key in matchingKeys) {
             versioningToml.libraries[key]?.let { it ->
@@ -72,9 +92,11 @@ fun Project.useLocalDependencies() {
             }
         }
     }
+
     fun local(gitUrl: String, startsWith: String) {
         local(gitUrl) { it.startsWith(startsWith) }
     }
+
     fun local(gitUrl: String, artifacts: Collection<String>) {
         local(gitUrl) { it in artifacts }
     }
@@ -94,7 +116,10 @@ fun Project.useLocalDependencies() {
     )
     local(
         "git@github.com:lightningkite/lightning-server-kiteui.git",
-        "com.lightningkite.lightningserver:client",
+        listOf(
+            "com.lightningkite.lightningserver:client",
+            "com.lightningkite.lightningserver:server-client-utils",
+        )
     )
     local(
         "git@github.com:lightningkite/js-optimized-constructs.git",
@@ -112,24 +137,13 @@ fun Project.useLocalDependencies() {
     local(
         "git@github.com:lightningkite/lightning-server.git",
     ) {
-        it.startsWith("com.lightningkite.lightningserver") && !it.startsWith("com.lightningkite.lightningserver:client")
+        it.startsWith("com.lightningkite.lightningserver") && !it.startsWith("com.lightningkite.lightningserver:client") && !it.startsWith("com.lightningkite.lightningserver:server-client-utils")
     }
     local(
         "git@github.com:lightningkite/kotlin-test-manual.git",
-        listOf("com.lightningkite.testing.manual",
-        "com.lightningkite.testing:kotlin-test-manual-runtime",
+        listOf(
+            "com.lightningkite.testing.manual",
+            "com.lightningkite.testing:kotlin-test-manual-runtime",
         )
     )
-
-    if (versioningToml != versioningTomlStart) {
-        println("Updating versions toml...")
-        Toml.encodeToNativeWriter(
-            TomlTable.serializer(),
-            versioningToml.prettyTable(),
-            versioningTomlFile.writer()
-        )
-        println("Done.")
-    } else {
-        println("Versions are up to date.")
-    }
 }
