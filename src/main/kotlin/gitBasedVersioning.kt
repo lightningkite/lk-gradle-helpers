@@ -34,7 +34,14 @@ internal val isCi: Boolean
 internal fun File.gitBasedVersionUncached(): Version {
     val branch = this.getGitBranch()
     val isClean = this.getGitStatus().workingTreeClean || isCi
-    val describedByTag = this.getGitClosestTag()
+    val describedByTag =
+        try {
+            this.getGitClosestTag()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            println("FAILED to get version.  Using 0.0.0")
+            return Version(0, 0, 0)
+        }
     println("describedByTag: $describedByTag")
     return gitBasedVersionLogic(branch, describedByTag, isClean)
 }
@@ -67,7 +74,10 @@ internal fun gitBasedVersionLogic(
             if(!isStandardBranchName) branch.filter { it.isLetterOrDigit() }
             else if (isPreReleaseFromBranch) "prerelease"
             else null,
-            describedByTag.prerelease,
+            describedByTag.prerelease.let {
+                if(!isClean) it?.toIntOrNull()?.plus(1)?.toString()
+                else it
+            },
             if(!isClean) "local" else null
         ).joinToString("-").takeUnless { it.isBlank() },
         buildMetadata = describedByTag.buildMetadata
