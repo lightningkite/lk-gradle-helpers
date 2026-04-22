@@ -21,7 +21,7 @@ import java.net.URI
 import kotlin.text.set
 import kotlin.toString
 
-fun Project.lkPublishing(githubOrg: String, githubRepo: String, pom: MavenPom.()->Unit) {
+fun Project.lkPublishing(githubOrg: String, githubRepo: String, automaticRelease: Boolean = true, pom: MavenPom.()->Unit) {
     project.repositories {
         mavenLocal()
         maven("https://lightningkite-maven.s3.us-west-2.amazonaws.com")
@@ -61,7 +61,7 @@ fun Project.lkPublishing(githubOrg: String, githubRepo: String, pom: MavenPom.()
                 println("Running signing config")
                 isRequired = false
                 val signingPassword: String? = project.findProperty("signingPassword") as? String
-                if (signingKey != null) {
+                if (signingPassword != null) {
                     println("Signing password found; will sign")
                     useInMemoryPgpKeys(signingKey, signingPassword)
                 } else {
@@ -114,7 +114,7 @@ fun Project.lkPublishing(githubOrg: String, githubRepo: String, pom: MavenPom.()
         }
     }
     configure<MavenPublishBaseExtension> {
-        publishToMavenCentral(automaticRelease = true)
+        publishToMavenCentral(automaticRelease = automaticRelease)
         signAllPublications()
         coordinates(group.toString(), name, version.toString())
         configureBasedOnAppliedPlugins(
