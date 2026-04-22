@@ -21,7 +21,7 @@ import java.net.URI
 import kotlin.text.set
 import kotlin.toString
 
-fun Project.lkPublishing(githubOrg: String, githubRepo: String, automaticRelease: Boolean = true, pom: MavenPom.()->Unit) {
+fun Project.lkPublishing(githubOrg: String, githubRepo: String, mavenAutomaticRelease: Boolean = true, pom: MavenPom.()->Unit) {
     project.repositories {
         mavenLocal()
         maven("https://lightningkite-maven.s3.us-west-2.amazonaws.com")
@@ -114,7 +114,7 @@ fun Project.lkPublishing(githubOrg: String, githubRepo: String, automaticRelease
         }
     }
     configure<MavenPublishBaseExtension> {
-        publishToMavenCentral(automaticRelease = automaticRelease)
+        publishToMavenCentral(automaticRelease = mavenAutomaticRelease)
         signAllPublications()
         coordinates(group.toString(), name, version.toString())
         configureBasedOnAppliedPlugins(
