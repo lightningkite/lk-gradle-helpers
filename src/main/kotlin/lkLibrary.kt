@@ -3,8 +3,8 @@ package com.lightningkite.deployhelpers
 import org.gradle.api.Project
 import org.gradle.api.publish.maven.MavenPom
 
-fun Project.lkLibrary(githubOrg: String, githubRepo: String, pom: MavenPom.()->Unit) {
+fun Project.lkLibrary(githubOrg: String, githubRepo: String, mavenAutomaticRelease: Boolean = true,  pom: MavenPom.()->Unit) {
     useGitBasedVersion()
     setupDokka(githubOrg, githubRepo)
-    lkPublishing(githubOrg, githubRepo, pom)
+    lkPublishing(githubOrg, githubRepo, mavenAutomaticRelease, pom)
 }
