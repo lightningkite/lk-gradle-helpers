@@ -63,24 +63,26 @@ internal fun gitBasedVersionLogic(
     }
     val isPreReleaseFromBranch = intendedVersionByBranchName != null && intendedVersionByBranchName > describedByTag
 
+    val label = when {
+        isPreReleaseFromBranch -> "prerelease"
+        !isStandardBranchName -> branch.filter { it.isLetterOrDigit() }
+        else -> null
+    }
+
+    // A version branch declares the next release number; otherwise we sit on the previous tag and
+    // let the commit count carry us forward. We never bump the patch ourselves: the trailing commit
+    // count keeps a build above its base tag while staying below the next real release in Gradle's
+    // version ordering (where an extra numeric part raises a version above the bare `x.y.z`).
+    val base = if (isPreReleaseFromBranch) intendedVersionByBranchName!! else describedByTag
+
     return Version(
-        major = if(isPreReleaseFromBranch) intendedVersionByBranchName!!.major else describedByTag.major,
-        minor = if(isPreReleaseFromBranch) intendedVersionByBranchName!!.minor else describedByTag.minor,
-        patch = if (isPreReleaseFromBranch) intendedVersionByBranchName!!.patch else describedByTag.patch.let {
-            if(isClean && describedByTag.prerelease == null) it
-            else it + 1
-        },
-        prerelease = listOfNotNull(
-            if(!isStandardBranchName) branch.filter { it.isLetterOrDigit() }
-            else if (isPreReleaseFromBranch) "prerelease"
-            else null,
-            describedByTag.prerelease.let {
-                if(!isClean) it?.toIntOrNull()?.plus(1)?.toString()
-                else it
-            },
-            if(!isClean) "local" else null
-        ).joinToString("-").takeUnless { it.isBlank() },
-        buildMetadata = describedByTag.buildMetadata
+        major = base.major,
+        minor = base.minor,
+        patch = base.patch,
+        commitsAheadOfPrevious = describedByTag.commitsAheadOfPrevious,
+        branch = label,
+        buildHash = describedByTag.buildHash,
+        local = !isClean,
     )
 }
 
@@ -121,8 +123,14 @@ internal fun File.getGitTag(): Version? = try {
     null
 }
 
-internal fun File.getGitClosestTag(): Version =
-    runCli("git", "describe", "--tags").trim().substringBeforeLast('-').let(Version::fromString)
+internal fun File.getGitClosestTag(): Version {
+    val tag = runCli("git", "describe", "--tags", "--abbrev=0").trim()
+    val base = Version.fromString(tag)
+    val commitsAhead = runCli("git", "rev-list", "$tag..HEAD", "--count").trim().toIntOrNull() ?: 0
+    if (commitsAhead == 0) return base
+    val shortHash = runCli("git", "rev-parse", "--short", "HEAD").trim()
+    return base.copy(commitsAheadOfPrevious = commitsAhead, buildHash = shortHash)
+}
 
 internal fun File.getGitHash(): String = runCli("git", "rev-parse", "HEAD").trim()
 internal data class GitStatus(
@@ -161,54 +169,71 @@ internal fun File.getGitStatus(): GitStatus = runCli("git", "status").let {
     )
 }
 
+/**
+ * A semantic version as Lightning Kite produces them from git history.
+ *
+ * String form: `major.minor.patch[-branch][-commitsAheadOfPrevious][-buildHash][-local]`, e.g.
+ * `5.0.0-prerelease-8-a1b2c3d` for a pre-release build 8 commits past the previous tag, or
+ * `1.2.3-3-a1b2c3d-1-local` for a dirty local build 3 commits past tag `1.2.3` (the trailing `-1`
+ * is a marker that sorts a dirty build just above the clean build of the same commit; see below).
+ */
 data class Version(
     val major: Int,
     val minor: Int,
     val patch: Int,
-    val prerelease: String? = null,
-    val buildMetadata: String? = null
+    /** Number of commits since the previous tag, or null when built exactly on a tag. */
+    val commitsAheadOfPrevious: Int? = null,
+    /** Pre-release label: "prerelease" for a version branch, or a sanitized feature-branch name. */
+    val branch: String? = null,
+    /** Short git commit hash, present for builds that are ahead of the previous tag. */
+    val buildHash: String? = null,
+    /** True for builds made against a dirty working tree. */
+    val local: Boolean = false,
 ) : Comparable<Version> {
-    constructor(
-        major: Int,
-        minor: Int,
-        patch: Int,
-        prereleaseName: String? = null,
-        prereleaseBuildNumber: Int? = null,
-        buildMetadata: String? = null,
-    ) : this(
-        major = major,
-        minor = minor,
-        patch = patch,
-        prerelease = listOfNotNull(
-            prereleaseName,
-            prereleaseBuildNumber?.toString()?.padStart(4, '0')
-        ).joinToString("-"),
-        buildMetadata = buildMetadata?.takeUnless { it.isBlank() }
-    )
 
     override fun compareTo(other: Version): Int = comparator.compare(this, other)
 
     companion object {
-        private val comparator = compareBy(Version::major, Version::minor, Version::patch)
+        private val comparator = compareBy(Version::major, Version::minor, Version::patch, Version::commitsAheadOfPrevious)
+
+        /**
+         * Parses the leading `major.minor.patch` and an optional trailing `-commits-hash` pair, as
+         * produced by tags and `git describe`. Branch labels and the `local` marker are not parsed
+         * back; they only ever exist on freshly computed versions, never on tags we read.
+         */
         fun fromString(string: String): Version {
-            val parts = string.substringBefore('-').substringBefore('+').split(".")
-            val major = parts.getOrNull(0)?.toIntOrNull() ?: 0
-            val minor = parts.getOrNull(1)?.toIntOrNull() ?: 0
-            val patch = parts.getOrNull(2)?.toIntOrNull() ?: 0
-            val postDash = string.substringAfter('-', "").substringBefore('+').takeUnless { it.isBlank() }
-            val buildMetadata = string.substringAfter('+', "").substringBefore('-').takeUnless { it.isBlank() }
-            return Version(major, minor, patch, postDash, buildMetadata)
+            val core = string.substringBefore('-').split('.')
+            val rest = string.substringAfter('-', "")
+            return Version(
+                major = core.getOrNull(0)?.toIntOrNull() ?: 0,
+                minor = core.getOrNull(1)?.toIntOrNull() ?: 0,
+                patch = core.getOrNull(2)?.toIntOrNull() ?: 0,
+                commitsAheadOfPrevious = rest.substringBefore('-', "").toIntOrNull(),
+                buildHash = rest.substringAfter('-', "").takeUnless { it.isBlank() },
+            )
         }
     }
 
-    override fun toString(): String =
-        "$major.$minor.$patch" + (prerelease?.let { "-$it" } ?: "") + (buildMetadata?.let { "+$it" } ?: "")
-
-    fun incrementPatch() = copy(patch = patch + 1)
-
-    val prereleaseBuildNumber: Int get() = prerelease?.filter { it.isDigit() }?.toIntOrNull() ?: -1
-    val prereleaseName: String? get() = prerelease?.filter { it.isLetter() }?.takeUnless { it.isBlank() }
-    fun incrementPrereleaseBuildNumber() = copy(buildMetadata = buildMetadata)
+    override fun toString(): String = buildString {
+        append(major)
+        append('.')
+        append(minor)
+        append('.')
+        append(patch)
+        branch?.let { append('-'); append(it) }
+        commitsAheadOfPrevious?.let { append('-'); append(it) }
+        buildHash?.let { append('-'); append(it) }
+        if (local) {
+            // A dirty build must sort *above* the clean build of the same commit yet *below* the
+            // next commit, in Gradle's version ordering. Gradle ranks a version with an extra
+            // numeric part above one without it, so the trailing "-1" raises the dirty build just
+            // above the clean one; the next commit still wins on its higher commit count. When built
+            // on an exact tag there is no commit count yet, so we add a "0" to occupy that slot and
+            // remain below commit #1 (whose count is 1).
+            if (commitsAheadOfPrevious == null) append("-0")
+            append("-1-local")
+        }
+    }
 }
 
 internal fun File.gitLatestTag(major: Int, minor: Int): Version? {

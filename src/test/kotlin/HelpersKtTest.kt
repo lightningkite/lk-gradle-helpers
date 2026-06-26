@@ -69,21 +69,4 @@ class HelpersKtTest {
     @Test fun caseFix() {
         println("org.jetbrains.kotlin.plugin.serialization".camelCase())
     }
-    @Test fun toml() {
-
-        Toml.decodeFromString(VersionsToml.serializer(), """
-            [versions]
-            kotlinXSerialization="1.7.3"
-            kotlin="2.0.21"
-
-            [libraries]
-            kotlinXJson={module="org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref="kotlinXSerialization"}
-
-            [plugins]
-            serialization={id="org.jetbrains.kotlin.plugin.serialization", version.ref="kotlin"}
-
-        """.trimIndent()).also { println(it) }.also {
-            it.prettyTable().let { Toml.encodeToString(it) }.let { println(it) }
-        }
-    }
 }
