@@ -40,6 +40,7 @@ dependencies {
     implementation("com.vanniktech.maven.publish:com.vanniktech.maven.publish.gradle.plugin:0.34.0")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test:$kotlinVersion")
+    testImplementation(gradleTestKit())
 }
 
 afterEvaluate {
@@ -49,7 +50,7 @@ afterEvaluate {
     }
 }
 
-version = "4.1.0"
+version = "4.1.1"
 
 publishing {
     repositories {

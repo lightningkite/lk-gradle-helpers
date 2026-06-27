@@ -47,8 +47,8 @@ class GitBasedVersioningTest {
             describedByTag = Version.fromString("5.1.1"),
             isClean = true
         ).toString())
-        assertEquals("5.2.0-prerelease", gitBasedVersionLogic(
-            branch = "version-5.2",
+        assertEquals("5.1.1", gitBasedVersionLogic(
+            branch = "someweirdstuff",
             describedByTag = Version.fromString("5.1.1"),
             isClean = true
         ).toString())

@@ -1,42 +1,99 @@
 package com.lightningkite.deployhelpers
 
 import org.gradle.api.Project
+import org.gradle.api.provider.ValueSource
+import org.gradle.api.provider.ValueSourceParameters
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.process.ExecOperations
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.time.OffsetDateTime
 import java.util.WeakHashMap
+import javax.inject.Inject
 
-val versionCache = WeakHashMap<Project, Pair<String, String>>()
+// One computed version per build, shared across subprojects. Keyed on the root Project instance,
+// which Gradle recreates each build invocation, so entries never leak across builds (and the weak
+// keys let them be collected). Replaces the old start-parameter-identity cache.
+private val versionCache = WeakHashMap<Project, String>()
+
 fun Project.useGitBasedVersion() {
-    if (!project.rootDir.resolve(".git").exists()) {
+    if (!rootProject.rootDir.resolve(".git").exists()) {
         return
     }
     version = gitBasedVersion()
 }
 
-fun Project.gitBasedVersion(): String {
-    val (runId, existingVersion) = versionCache[project.rootProject] ?: ("0" to "0.0.0")
-    val myRunId = System.identityHashCode(project.gradle.startParameter).toString()
-    if (myRunId == runId) return existingVersion
-
-    val result = project.rootDir.gitBasedVersionUncached().toString()
-    println("Project version: $result")
-    versionCache[project.rootProject] = myRunId to result
-    return result
+/**
+ * The git-derived version string for this build.
+ *
+ * The git invocations and CI-env reads happen inside [GitVersionValueSource] rather than directly
+ * here, so that this stays compatible with Gradle's configuration cache: Gradle records the result
+ * as a configuration input and only re-runs git to check whether the cached configuration is still
+ * valid, instead of flagging the process execution as a problem and dropping the cache.
+ */
+fun Project.gitBasedVersion(): String = versionCache.getOrPut(rootProject) {
+    rootProject.providers.of(GitVersionValueSource::class.java) {
+        parameters.rootDir.set(rootProject.layout.projectDirectory)
+    }.get()
 }
 
-internal val isCi: Boolean
-    get() =
-        System.getenv("GITHUB_ACTIONS") == "true" ||
-                System.getenv("TRAVIS") == "true" ||
-                System.getenv("CIRCLECI") == "true" ||
-                System.getenv("GITLAB_CI") == "true"
+/** Obtains the git version through Gradle's value-source mechanism (configuration-cache safe). */
+internal abstract class GitVersionValueSource : ValueSource<String, GitVersionValueSource.Params> {
+    interface Params : ValueSourceParameters {
+        val rootDir: DirectoryProperty
+    }
 
-internal fun File.gitBasedVersionUncached(): Version {
-    val branch = this.getGitBranch()
-    val isClean = this.getGitStatus().workingTreeClean || isCi
+    @get:Inject
+    abstract val exec: ExecOperations
+
+    override fun obtain(): String {
+        val dir = parameters.rootDir.get().asFile
+        val cli = GitCli { args ->
+            val out = ByteArrayOutputStream()
+            exec.exec {
+                workingDir = dir
+                commandLine(listOf("git", *args))
+                standardOutput = out
+            }
+            out.toString(Charsets.UTF_8)
+        }
+        val result = cli.computeVersion().toString()
+        println("Project version: $result")
+        return result
+    }
+}
+
+/**
+ * Runs `git` with the given args and returns its stdout. Implemented two ways: a plain
+ * ProcessBuilder backend for tests and non-Gradle callers (see [File.gitCli]), and an
+ * [ExecOperations] backend for the configuration-cache-safe [GitVersionValueSource]. The version
+ * logic below is written against this interface so both backends behave identically.
+ */
+internal fun interface GitCli {
+    fun git(vararg args: String): String
+}
+
+internal fun GitCli.gitBranch(): String = git("rev-parse", "--abbrev-ref", "HEAD").trim()
+
+// `--porcelain` prints nothing when the working tree (including untracked files) is clean, which is
+// equivalent to the old "working tree clean" status text but far less fragile to parse.
+internal fun GitCli.gitWorkingTreeClean(): Boolean = git("status", "--porcelain").isBlank()
+
+internal fun GitCli.gitClosestTagVersion(): Version {
+    val tag = git("describe", "--tags", "--abbrev=0").trim()
+    val base = Version.fromString(tag)
+    val commitsAhead = git("rev-list", "$tag..HEAD", "--count").trim().toIntOrNull() ?: 0
+    if (commitsAhead == 0) return base
+    val shortHash = git("rev-parse", "--short", "HEAD").trim()
+    return base.copy(commitsAheadOfPrevious = commitsAhead, buildHash = shortHash)
+}
+
+internal fun GitCli.computeVersion(): Version {
+    val branch = gitBranch()
+    val isClean = gitWorkingTreeClean() || isCi
     val describedByTag =
         try {
-            this.getGitClosestTag()
+            gitClosestTagVersion()
         } catch (e: Exception) {
             e.printStackTrace()
             println("FAILED to get version.  Using 0.0.0")
@@ -45,6 +102,18 @@ internal fun File.gitBasedVersionUncached(): Version {
     println("describedByTag: $describedByTag")
     return gitBasedVersionLogic(branch, describedByTag, isClean)
 }
+
+/** ProcessBuilder-backed [GitCli] rooted at this directory (used by tests and non-Gradle callers). */
+internal fun File.gitCli(): GitCli = GitCli { args -> runCli("git", *args) }
+
+internal val isCi: Boolean
+    get() =
+        System.getenv("GITHUB_ACTIONS") == "true" ||
+                System.getenv("TRAVIS") == "true" ||
+                System.getenv("CIRCLECI") == "true" ||
+                System.getenv("GITLAB_CI") == "true"
+
+internal fun File.gitBasedVersionUncached(): Version = gitCli().computeVersion()
 
 internal fun gitBasedVersionLogic(
     branch: String,
@@ -80,7 +149,7 @@ internal fun gitBasedVersionLogic(
         minor = base.minor,
         patch = base.patch,
         commitsAheadOfPrevious = describedByTag.commitsAheadOfPrevious,
-        branch = label,
+        branch = label.takeUnless { isClean && describedByTag.buildHash == null },
         buildHash = describedByTag.buildHash,
         local = !isClean,
     )
@@ -116,21 +185,14 @@ internal fun File.runCliWithOutput(vararg args: String) {
 internal fun File.getGitCommitTime(): OffsetDateTime =
     OffsetDateTime.parse(runCli("git", "show", "--no-patch", "--format=%ci", "HEAD").trim())
 
-internal fun File.getGitBranch(): String = runCli("git", "rev-parse", "--abbrev-ref", "HEAD").trim()
+internal fun File.getGitBranch(): String = gitCli().gitBranch()
 internal fun File.getGitTag(): Version? = try {
     runCli("git", "describe", "--exact-match", "--tags").trim().let(Version::fromString)
 } catch (e: Exception) {
     null
 }
 
-internal fun File.getGitClosestTag(): Version {
-    val tag = runCli("git", "describe", "--tags", "--abbrev=0").trim()
-    val base = Version.fromString(tag)
-    val commitsAhead = runCli("git", "rev-list", "$tag..HEAD", "--count").trim().toIntOrNull() ?: 0
-    if (commitsAhead == 0) return base
-    val shortHash = runCli("git", "rev-parse", "--short", "HEAD").trim()
-    return base.copy(commitsAheadOfPrevious = commitsAhead, buildHash = shortHash)
-}
+internal fun File.getGitClosestTag(): Version = gitCli().gitClosestTagVersion()
 
 internal fun File.getGitHash(): String = runCli("git", "rev-parse", "HEAD").trim()
 internal data class GitStatus(
