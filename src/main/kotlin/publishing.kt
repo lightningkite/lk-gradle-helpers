@@ -1,27 +1,32 @@
 package com.lightningkite.deployhelpers
 
-import com.vanniktech.maven.publish.KotlinMultiplatform
 import com.vanniktech.maven.publish.MavenPublishBaseExtension
-import net.peanuuutz.tomlkt.Toml
-import net.peanuuutz.tomlkt.TomlTable
-import net.peanuuutz.tomlkt.encodeToNativeWriter
 import org.gradle.api.Project
 import org.gradle.api.credentials.AwsCredentials
 import org.gradle.api.publish.maven.MavenPom
-import org.gradle.kotlin.dsl.configure
-import org.gradle.kotlin.dsl.credentials
-import org.gradle.kotlin.dsl.maven
-import org.gradle.kotlin.dsl.repositories
-import org.gradle.kotlin.dsl.withType
+import org.gradle.kotlin.dsl.*
 import org.gradle.plugins.signing.Sign
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
-import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
+import software.amazon.awssdk.auth.credentials.*
 import java.net.URI
-import kotlin.text.set
-import kotlin.toString
 
-fun Project.lkPublishing(githubOrg: String, githubRepo: String, mavenAutomaticRelease: Boolean = true, pom: MavenPom.()->Unit) {
+/**
+ * Credentials for publishing to the LightningKite S3 maven repository.
+ * Uses the `lightningKiteMavenAwsAccessKey`/`lightningKiteMavenAwsSecretAccessKey` properties if present,
+ * otherwise falls back to the `lk` AWS profile.
+ */
+private fun Project.lightningKiteMavenCredentials(): software.amazon.awssdk.auth.credentials.AwsCredentials? {
+    val accessKey = findProperty("lightningKiteMavenAwsAccessKey") as? String
+    val secretKey = findProperty("lightningKiteMavenAwsSecretAccessKey") as? String
+    if (accessKey != null && secretKey != null) return AwsBasicCredentials.create(accessKey, secretKey)
+    return runCatching { ProfileCredentialsProvider.create("lk").resolveCredentials() }.getOrNull()
+}
+
+fun Project.lkPublishing(
+    githubOrg: String,
+    githubRepo: String,
+    mavenAutomaticRelease: Boolean = true,
+    pom: MavenPom.() -> Unit,
+) {
     project.repositories {
         mavenLocal()
         maven("https://lightningkite-maven.s3.us-west-2.amazonaws.com")
@@ -31,27 +36,25 @@ fun Project.lkPublishing(githubOrg: String, githubRepo: String, mavenAutomaticRe
     }
 
     afterEvaluate {
-        val lightningKiteMavenAwsAccessKey: String? =
-            project.findProperty("lightningKiteMavenAwsAccessKey") as? String
-        val lightningKiteMavenAwsSecretAccessKey: String? =
-            project.findProperty("lightningKiteMavenAwsSecretAccessKey") as? String
+        val lightningKiteMavenCredentials = project.lightningKiteMavenCredentials()
         project.publishing {
             repositories {
-                lightningKiteMavenAwsAccessKey?.let { ak ->
+                lightningKiteMavenCredentials?.let { creds ->
                     maven {
                         name = "LightningKite"
                         url = URI.create("s3://lightningkite-maven")
                         credentials(AwsCredentials::class) {
-                            accessKey = ak
-                            secretKey = lightningKiteMavenAwsSecretAccessKey!!
+                            accessKey = creds.accessKeyId()
+                            secretKey = creds.secretAccessKey()
+                            sessionToken = (creds as? AwsSessionCredentials)?.sessionToken()
                         }
                     }
                 }
             }
         }
 
-        lightningKiteMavenAwsAccessKey?.let { ak ->
-            dokkaUploadTask(ak, lightningKiteMavenAwsSecretAccessKey!!)
+        lightningKiteMavenCredentials?.let { creds ->
+            dokkaUploadTask(StaticCredentialsProvider.create(creds))
         }
 
         val signingKey: String? = project.findProperty("signingKey") as? String
@@ -119,7 +122,8 @@ fun Project.lkPublishing(githubOrg: String, githubRepo: String, mavenAutomaticRe
         coordinates(group.toString(), name, version.toString())
         configureBasedOnAppliedPlugins(
             sourcesJar = true,
-            javadocJar = version.toString().all { it.isDigit() || it == '.' } || localProperties?.getProperty("forceDokka") == "true"
+            javadocJar = version.toString()
+                .all { it.isDigit() || it == '.' } || localProperties?.getProperty("forceDokka") == "true"
         )
         pom(configure = {
             name.set(this@lkPublishing.name)

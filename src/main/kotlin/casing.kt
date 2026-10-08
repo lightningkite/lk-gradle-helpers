@@ -1,3 +1,4 @@
+@file:Suppress("Deprecation")
 package com.lightningkite.deployhelpers
 
 
@@ -11,8 +12,8 @@ inline fun String.caseAlter(crossinline update: (after: String) -> String): Stri
 
 fun String.titleCase() = caseAlter { " " + it.capitalize() }.capitalize()
 fun String.spaceCase() = caseAlter { " " + it }.decapitalize()
-fun String.kabobCase() = caseAlter { "-$it" }.toLowerCase()
-fun String.snakeCase() = caseAlter { "_$it" }.toLowerCase()
-fun String.screamingSnakeCase() = caseAlter { "_$it" }.toUpperCase()
+fun String.kabobCase() = caseAlter { "-$it" }.lowercase()
+fun String.snakeCase() = caseAlter { "_$it" }.lowercase()
+fun String.screamingSnakeCase() = caseAlter { "_$it" }.uppercase()
 fun String.camelCase() = caseAlter { it.capitalize() }.decapitalize()
 fun String.pascalCase() = caseAlter { it.capitalize() }.capitalize()

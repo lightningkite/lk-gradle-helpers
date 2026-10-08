@@ -1,22 +1,11 @@
 package com.lightningkite.deployhelpers
 
 import org.gradle.api.Project
-import org.gradle.api.provider.Property
-import org.gradle.api.tasks.Input
 import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.dependencies
-import org.gradle.kotlin.dsl.invoke
-import org.gradle.kotlin.dsl.withType
 import org.jetbrains.dokka.gradle.DokkaExtension
-import org.jetbrains.dokka.gradle.DokkaTask
-import org.jetbrains.dokka.gradle.engine.plugins.DokkaPluginParametersBaseSpec
-import org.jetbrains.dokka.gradle.internal.InternalDokkaGradlePluginApi
-import org.jetbrains.dokka.gradle.tasks.DokkaGeneratePublicationTask
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
+import software.amazon.awssdk.auth.credentials.*
 import java.net.URI
-import java.net.URL
-import javax.inject.Inject
 
 
 val Project.dokkaPublicHostingRootPath: String
@@ -25,8 +14,12 @@ val Project.dokkaPublicHostingPath: String
     get() = group.toString().replace('.', '/') + "/" + name + "/" + version + "/docs"
 val Project.dokkaPublicHostingIndex: String get() = "https://lightningkite-maven.s3.amazonaws.com/$dokkaPublicHostingPath/index.html"
 
-fun Project.dokkaUploadTask(accessKey: String, secret: String) {
-    (project.tasks.findByName("dokkaGeneratePublicationHtml") ?: project.tasks.findByName("dokkaHtml"))?.let { dokkaHtml ->
+fun Project.dokkaUploadTask(accessKey: String, secret: String) =
+    dokkaUploadTask(StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secret)))
+
+fun Project.dokkaUploadTask(credentials: AwsCredentialsProvider) {
+    (project.tasks.findByName("dokkaGeneratePublicationHtml")
+        ?: project.tasks.findByName("dokkaHtml"))?.let { dokkaHtml ->
         val publishDokka = project.tasks.create("publishDokkaToS3") {
             dependsOn(dokkaHtml)
             group = "publishing"
@@ -36,7 +29,7 @@ fun Project.dokkaUploadTask(accessKey: String, secret: String) {
                 dir.uploadDirectoryToS3(
                     bucket = "lightningkite-maven",
                     keyPrefix = project.dokkaPublicHostingPath,
-                    credentials = StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secret)),
+                    credentials = credentials,
                 ).also {
                     println("Published docs to $it")
                 }
@@ -62,7 +55,7 @@ fun Project.dokkaUploadTask(accessKey: String, secret: String) {
                             </html>
                         """.trimIndent()
                     ),
-                    credentials = StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secret)),
+                    credentials = credentials,
                 ).also {
                     println("Published additional cross-version content to $it")
                 }

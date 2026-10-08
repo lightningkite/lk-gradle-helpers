@@ -3,20 +3,9 @@ package com.lightningkite.deployhelpers
 import groovy.util.Node
 import groovy.util.NodeList
 import groovy.xml.XmlParser
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
-import net.peanuuutz.tomlkt.Toml
-import net.peanuuutz.tomlkt.TomlInline
-import net.peanuuutz.tomlkt.TomlTable
-import net.peanuuutz.tomlkt.buildTomlTable
-import net.peanuuutz.tomlkt.element
-import net.peanuuutz.tomlkt.encodeToTomlElement
-import net.peanuuutz.tomlkt.literal
-import net.peanuuutz.tomlkt.table
 import org.junit.Test
 import java.io.File
 import java.io.StringReader
-import java.net.URL
 import kotlin.test.assertEquals
 
 class HelpersKtTest {
@@ -27,15 +16,38 @@ class HelpersKtTest {
         println(File(".").gitLatestTag(0, 0))
     }
 
-    @Test fun tag() {
+    @Test
+    fun tag() {
         File(".").runCli("git", "describe", "--tags", "--match", "0.0.*")
             .let(::println)
     }
-    @Test fun tag2() {
-        File("/Users/jivie/Projects/kotlinx-serialization-csv-durable").gitLatestTag(0, 2).let(::println)
+
+    @Test
+    fun tag2() {
+        val repo = kotlin.io.path.createTempDirectory("gitLatestTag").toFile()
+        try {
+            repo.runCli("git", "init")
+            repo.runCli(
+                "git",
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init"
+            )
+            listOf("0.1.5", "0.2.2", "0.2.10", "0.2.9", "0.3.0").forEach { repo.runCli("git", "tag", it) }
+            assertEquals(Version(0, 2, 10), repo.gitLatestTag(0, 2))
+            assertEquals(null, repo.gitLatestTag(0, 4))
+        } finally {
+            repo.deleteRecursively()
+        }
     }
 
-    @Test fun parseVersions() {
+    @Test
+    fun parseVersions() {
         """
             <metadata>
             <groupId>com.lightningkite</groupId>
@@ -66,7 +78,9 @@ class HelpersKtTest {
                 Version.fromString((it as Node).text().also { println(it) })
             }
     }
-    @Test fun caseFix() {
+
+    @Test
+    fun caseFix() {
         println("org.jetbrains.kotlin.plugin.serialization".camelCase())
     }
 }
